@@ -3,7 +3,11 @@ package com.example.addon.hud;
 import com.example.addon.HuntingUtilities;
 import com.example.addon.modules.LootLens;
 
-import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
@@ -39,6 +43,15 @@ public class LootLensHud extends HudElement {
         .name("show-ender-chests")
         .description("Show the ender chest count.")
         .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
+        .name("scale")
+        .description("Scale of the HUD element.")
+        .defaultValue(1.0)
+        .min(0.25)
+        .sliderRange(0.25, 4.0)
         .build()
     );
 
@@ -84,24 +97,26 @@ public class LootLensHud extends HudElement {
         LootLens module = Modules.get().get(LootLens.class);
         if (module == null || !module.isActive()) { setSize(0, 0); return; }
 
+        double s = scale.get();
+
         // Build segments: each is [label, value], enabled segments get a separator between them
         java.util.List<String[]> segments = new java.util.ArrayList<>();
-        if (showDoubleChests.get()) segments.add(new String[]{"Chests: ",      String.valueOf(module.getDoubleChestCount())});
-        if (showShulkers.get())     segments.add(new String[]{"Shulkers: ",    String.valueOf(module.getShulkerBoxCount())});
-        if (showEnderChests.get())  segments.add(new String[]{"Ender Chests: ",String.valueOf(module.getEnderChestCount())});
+        if (showDoubleChests.get()) segments.add(new String[]{"Chests: ",       String.valueOf(module.getDoubleChestCount())});
+        if (showShulkers.get())     segments.add(new String[]{"Shulkers: ",     String.valueOf(module.getShulkerBoxCount())});
+        if (showEnderChests.get())  segments.add(new String[]{"Ender Chests: ", String.valueOf(module.getEnderChestCount())});
 
         if (segments.isEmpty()) { setSize(0, 0); return; }
 
-        double padH       = 4;
-        double padV       = 2;
-        double lineHeight = renderer.textHeight(false, 1);
-        double sepW       = renderer.textWidth(" | ", false, 1);
+        double padH       = 4 * s;
+        double padV       = 2 * s;
+        double lineHeight = renderer.textHeight(false, s);
+        double sepW       = renderer.textWidth(" | ", false, s);
 
         // Measure total width
         double totalTextW = 0;
         for (int i = 0; i < segments.size(); i++) {
-            totalTextW += renderer.textWidth(segments.get(i)[0], false, 1);
-            totalTextW += renderer.textWidth(segments.get(i)[1], false, 1);
+            totalTextW += renderer.textWidth(segments.get(i)[0], false, s);
+            totalTextW += renderer.textWidth(segments.get(i)[1], false, s);
             if (i < segments.size() - 1) totalTextW += sepW;
         }
 
@@ -119,14 +134,14 @@ public class LootLensHud extends HudElement {
             String label = segments.get(i)[0];
             String value = segments.get(i)[1];
 
-            renderer.text(label, drawX, drawY, labelColor.get(), false, 1);
-            drawX += renderer.textWidth(label, false, 1);
+            renderer.text(label, drawX, drawY, labelColor.get(), false, s);
+            drawX += renderer.textWidth(label, false, s);
 
-            renderer.text(value, drawX, drawY, valueColor.get(), false, 1);
-            drawX += renderer.textWidth(value, false, 1);
+            renderer.text(value, drawX, drawY, valueColor.get(), false, s);
+            drawX += renderer.textWidth(value, false, s);
 
             if (i < segments.size() - 1) {
-                renderer.text(" | ", drawX, drawY, separatorColor.get(), false, 1);
+                renderer.text(" | ", drawX, drawY, separatorColor.get(), false, s);
                 drawX += sepW;
             }
         }

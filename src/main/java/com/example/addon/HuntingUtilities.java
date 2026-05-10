@@ -10,13 +10,17 @@ import com.example.addon.hud.PositionHud;
 import com.example.addon.hud.StatsHud;
 import com.example.addon.modules.DungeonAssistant;
 import com.example.addon.modules.ElytraAssistant;
+import com.example.addon.modules.EndSafe;
 import com.example.addon.modules.Graveyard;
+import com.example.addon.modules.Handmold;
 import com.example.addon.modules.Illushine;
 import com.example.addon.modules.Inventory101;
 import com.example.addon.modules.LavaMarker;
 import com.example.addon.modules.LootLens;
+import com.example.addon.modules.Mendbot;
 import com.example.addon.modules.Mobanom;
 import com.example.addon.modules.NeighbourhoodWatch;
+import com.example.addon.modules.PearlPulse;
 import com.example.addon.modules.PortalMaker;
 import com.example.addon.modules.PortalTracker;
 import com.example.addon.modules.RocketPilot;
@@ -25,8 +29,6 @@ import com.example.addon.modules.SignScanner;
 import com.example.addon.modules.ThirdSight;
 import com.example.addon.modules.Timethrottle;
 import com.example.addon.modules.Tunnelers;
-import com.example.addon.modules.Handmold;
-import com.example.addon.modules.Mendbot;
 
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.hud.Hud;
@@ -47,6 +49,7 @@ public class HuntingUtilities extends MeteorAddon {
         Modules modules = Modules.get();
         modules.add(new DungeonAssistant());
         modules.add(new ElytraAssistant());
+        modules.add(new EndSafe());
         modules.add(new Graveyard());
         modules.add(new Inventory101());
         modules.add(new Illushine());
@@ -64,6 +67,7 @@ public class HuntingUtilities extends MeteorAddon {
         modules.add(new ThirdSight());
         modules.add(new Handmold());
         modules.add(new Mendbot());
+        modules.add(new PearlPulse());
 
         // HUD elements
         Hud.get().register(StatsHud.INFO);

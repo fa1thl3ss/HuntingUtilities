@@ -574,11 +574,12 @@ public class RocketPilot extends Module {
         .build()
     );
 
+    // FIX: panicKey now disconnects immediately instead of initiating a safe landing.
     private final Setting<Keybind> panicKey = sgFlightSafety.add(new KeybindSetting.Builder()
         .name("panic-key")
-        .description("Initiates or cancels a safe landing, overriding other patterns.")
+        .description("Immediately disconnects from the server and disables the module.")
         .defaultValue(Keybind.none())
-        .action(this::togglePanicLanding)
+        .action(this::panicDisconnect)
         .build()
     );
 
@@ -634,7 +635,6 @@ public class RocketPilot extends Module {
     private int     totemPops                = 0;
     private boolean emergencyLanding         = false;
     private int     takeoffTimer             = 0;
-    private boolean panicLanding             = false;
     private int     takeoffWaitTicks         = 0;
 
     // Pattern flight state
@@ -669,19 +669,14 @@ public class RocketPilot extends Module {
         info("Pattern flight %s.", paused ? "paused" : "resumed");
     }
 
-    private void togglePanicLanding() {
+    // FIX: Replaced togglePanicLanding with panicDisconnect. Instantly disconnects
+    // from the server without any safe-landing delay, which is the correct behaviour
+    // for a true panic scenario (e.g. unexpected PvP, server-side danger).
+    private void panicDisconnect() {
         if (mc.currentScreen != null) return;
-        if (panicLanding) {
-            panicLanding = false;
-            info("Panic landing cancelled. Resuming normal flight.");
-            return;
-        }
-        if (mc.player == null || !mc.player.isGliding()) {
-            info("Not flying, cannot panic land.");
-            return;
-        }
-        panicLanding = true;
-        info("Panic landing initiated!");
+        if (mc.player == null) return;
+        info("Panic disconnect triggered!");
+        disconnect("[RocketPilot] Panic disconnect.");
     }
 
     private void resetPatternState() {
@@ -717,7 +712,6 @@ public class RocketPilot extends Module {
         ceilingWarningSent       = false;
         emergencyLanding         = false;
         takeoffTimer             = 0;
-        panicLanding             = false;
         takeoffWaitTicks         = 0;
 
         resetPatternState();
@@ -758,7 +752,6 @@ public class RocketPilot extends Module {
     public void onDeactivate() {
         needsTakeoffRocket = false;
         takeoffWaitTicks   = 0;
-        panicLanding       = false;
         resetPatternState();
     }
 
@@ -843,39 +836,51 @@ public class RocketPilot extends Module {
             ceilingWarningSent = false;
         }
 
+        // FIX: Track whether a safety system has taken control of pitch this tick.
+        // This gate is used below to suppress pattern yaw when landing/avoidance is active.
         Float desiredPitch = null;
+        boolean safetyOverride = false;
 
-        if (panicLanding) {
-            desiredPitch = handlePanicLanding();
-            if (mc.player.isOnGround() && takeoffTimer == 0) {
-                info("Panic landing complete.");
-                toggle();
-                return;
-            }
-        }
-
-        if (autoLandOnLowRockets.get() && rockets <= autoLandThreshold.get()) {
-            desiredPitch = handleLowRocketLanding();
-        }
-
-        if (desiredPitch == null && emergencyLanding) {
+        // Priority 1: Emergency landing (elytra critically low, no replacement)
+        if (emergencyLanding) {
             desiredPitch = handleEmergencyLanding();
-            if (desiredPitch == null) return;
+            if (desiredPitch == null) return; // module toggled/disconnected inside
+            safetyOverride = true;
         }
 
-        // Priority 3: nether ceiling avoidance
+        // Priority 2: Panic landing — low rocket auto-land.
+        // FIX: Use else-if chain so only one landing path runs per tick.
+        // Previously autoLandOnLowRockets ran unconditionally and could overwrite desiredPitch.
+        if (desiredPitch == null && autoLandOnLowRockets.get() && rockets <= autoLandThreshold.get()) {
+            desiredPitch   = handleLowRocketLanding();
+            safetyOverride = true;
+        }
+
+        // Priority 3: Nether ceiling avoidance
         if (desiredPitch == null && netherCeilingSafety.get()) {
             desiredPitch = handleNetherCeiling();
+            if (desiredPitch != null) safetyOverride = true;
         }
 
+        // Priority 4: Void safety (FIX: was defined but never called)
+        if (desiredPitch == null && voidSafety.get()) {
+            desiredPitch = handleVoidSafety();
+            if (desiredPitch != null) safetyOverride = true;
+        }
+
+        // Priority 5: Collision avoidance
         if (desiredPitch == null && collisionAvoidance.get()) {
             desiredPitch = handleCollisionAvoidance();
+            if (desiredPitch != null) safetyOverride = true;
         }
 
+        // Priority 6: Safe landing near ground
         if (desiredPitch == null && safeLanding.get() && getDistanceToGround() <= landingHeight.get()) {
-            desiredPitch = MathHelper.lerp(0.1f, mc.player.getPitch(), -10.0f);
+            desiredPitch   = MathHelper.lerp(0.1f, mc.player.getPitch(), -10.0f);
+            safetyOverride = true;
         }
 
+        // Priority 7: Normal flight modes (only if no safety system is active)
         if (desiredPitch == null) {
             desiredPitch = switch (flightMode.get()) {
                 case Pitch40        -> handlePitch40Mode();
@@ -883,7 +888,11 @@ public class RocketPilot extends Module {
                 case AltitudeBounce -> handleAltitudeBounceMode();
                 default             -> handleNormalMode();
             };
+        }
 
+        // FIX: Suppress pattern yaw when any safety system has taken control of pitch.
+        // Previously the pattern steered toward a distant waypoint during landings/avoidance.
+        if (!safetyOverride) {
             FlightPattern currentPattern = flightPattern.get();
             if (currentPattern == FlightPattern.Drunk) {
                 handleDrunkMode();
@@ -1004,7 +1013,6 @@ public class RocketPilot extends Module {
         Vec3d[] rays = { fwd, fwd.rotateY(0.5f), fwd.rotateY(-0.5f) };
 
         boolean obstacleDetected = false;
-        // Check forward cone
         for (Vec3d dir : rays) {
             BlockHitResult hit = mc.world.raycast(new RaycastContext(
                 camPos, camPos.add(dir.multiply(avoidanceDistance.get())),
@@ -1017,9 +1025,8 @@ public class RocketPilot extends Module {
 
         if (!obstacleDetected) return null;
 
-        // Try to steer horizontally first
-        Vec3d leftDir  = fwd.rotateY(1.5f); // ~85 degrees left
-        Vec3d rightDir = fwd.rotateY(-1.5f); // ~85 degrees right
+        Vec3d leftDir  = fwd.rotateY(1.5f);
+        Vec3d rightDir = fwd.rotateY(-1.5f);
         double checkDist = avoidanceDistance.get() * 1.5;
 
         boolean leftClear = mc.world.raycast(new RaycastContext(
@@ -1040,13 +1047,10 @@ public class RocketPilot extends Module {
         } else if (rightClear && !leftClear) {
             mc.player.setYaw(mc.player.getYaw() - yawSpeed);
         } else if (leftClear && rightClear) {
-            // Both clear, pick random or alternating
             if (mc.player.age % 2 == 0) mc.player.setYaw(mc.player.getYaw() + yawSpeed);
             else mc.player.setYaw(mc.player.getYaw() - yawSpeed);
         }
-        // If both blocked, or while steering, we also pull up below
 
-        // Pitch up logic (Vertical Avoidance)
         float currentPitch = mc.player.getPitch();
         double speed       = mc.player.getVelocity().horizontalLength();
         float pullUpStr    = (float) MathHelper.clamp(speed * 20, 20, 60);
@@ -1062,29 +1066,21 @@ public class RocketPilot extends Module {
     }
 
     // ─── Nether Ceiling Safety ────────────────────────────────────────────────────
-    /**
-     * Detects when the player is in the Nether and approaching the bedrock ceiling
-     * (Y=128). Pitches down hard to dive away before impact. Also suppresses rocket
-     * firing while the ceiling is threatening so ascent doesn't continue.
-     */
     private Float handleNetherCeiling() {
         if (mc.world == null || mc.player == null) return null;
 
-        // Only active in the Nether dimension
         if (!mc.world.getRegistryKey().getValue().getPath().equals("the_nether")) return null;
 
-        double currentY    = mc.player.getY();
-        double netherRoof  = 128.0;
-        int    buffer      = netherCeilingBuffer.get();
-        double triggerY    = netherRoof - buffer;
+        double currentY   = mc.player.getY();
+        double netherRoof = 128.0;
+        int    buffer     = netherCeilingBuffer.get();
+        double triggerY   = netherRoof - buffer;
 
-        if (currentY < triggerY) return null; // well below ceiling, nothing to do
+        if (currentY < triggerY) return null;
 
-        // How close are we: 0.0 = at triggerY, 1.0 = at the roof
         double danger = (currentY - triggerY) / buffer;
         danger = MathHelper.clamp(danger, 0.0, 1.0);
 
-        // Interpolate dive pitch: gentle at buffer distance, steep near the bedrock
         float targetDivePitch = (float) MathHelper.lerp(danger, 10.0, 60.0);
         float lerpSpeed       = (float) MathHelper.lerp(danger, 0.08, 0.35);
 
@@ -1097,6 +1093,8 @@ public class RocketPilot extends Module {
     }
 
     // ─── Void Safety ──────────────────────────────────────────────────────────────
+    // FIX: This method was previously defined but never called in onTick. It is now
+    // invoked at priority 4 (after nether ceiling, before collision avoidance).
     private Float handleVoidSafety() {
         if (mc.world == null || mc.player == null) return null;
         if (!mc.world.getRegistryKey().getValue().getPath().equals("the_end")) return null;
@@ -1109,20 +1107,12 @@ public class RocketPilot extends Module {
         // Critical: pitch up and fire
         if (shouldFireRocket() && countFireworks() > 0) {
             long now = System.currentTimeMillis();
-            if (now - lastRocketTime >= 300) { // Fire rapidly
+            if (now - lastRocketTime >= 300) {
                 fireRocket();
                 lastRocketTime = now;
             }
         }
         return -50.0f; // Pitch up steeply
-    }
-
-    private Float handlePanicLanding() {
-        if (getDistanceToGround() > landingHeight.get()) {
-            return MathHelper.lerp(0.05f, mc.player.getPitch(), 20.0f);
-        } else {
-            return MathHelper.lerp(0.1f, mc.player.getPitch(), -10.0f);
-        }
     }
 
     // ─── Normal Mode ─────────────────────────────────────────────────────────────
@@ -1224,12 +1214,10 @@ public class RocketPilot extends Module {
         double floorY   = bounceFloorY.get();
         float  smooth   = bouncePitchSmoothing.get().floatValue();
 
-        // Flip phase at the boundaries
         if (bounceClimbing && currentY >= peakY)  bounceClimbing = false;
         if (!bounceClimbing && currentY <= floorY) bounceClimbing = true;
 
         if (bounceClimbing) {
-            // Aggressive climb — fire rockets to power the ascent
             long now = System.currentTimeMillis();
             if (now - lastRocketTime >= rocketDelay.get()
                     && mc.player.getVelocity().y < 0.5
@@ -1239,7 +1227,6 @@ public class RocketPilot extends Module {
             }
             return MathHelper.lerp(smooth, mc.player.getPitch(), bounceClimbPitch.get().floatValue());
         } else {
-            // Glide descent — no rockets, nose down and let gravity do the work
             return MathHelper.lerp(smooth, mc.player.getPitch(), bounceGlidePitch.get().floatValue());
         }
     }
@@ -1393,23 +1380,13 @@ public class RocketPilot extends Module {
             DrunkBias bias  = drunkBias.get();
 
             if (bias == DrunkBias.None) {
-                // Fully random drift — no quadrant preference
                 targetDrunkYaw = mc.player.getYaw()
                     + (float)((Math.random() - 0.5) * 2.0 * intensity);
-
             } else {
-                // Each enum value locks the heading to a specific world quadrant.
-                // Minecraft yaw convention: 0 = south (+Z), 90 = west (-X),
-                //                          -90 = east (+X), ±180 = north (-Z)
-                //
-                //  PositiveOnly → +X / +Z  (SE)  yaw: -90 ..   0
-                //  NegativeOnly → -X / -Z  (NW)  yaw:  90 .. 180
-                //  NegPos       → -X / +Z  (SW)  yaw:   0 ..  90
-                //  PosNeg       → +X / -Z  (NE)  yaw: -180 .. -90
                 float minYaw, maxYaw;
                 boolean isNorth = false;
                 switch (bias) {
-                    case North        -> { isNorth = true; minYaw = 0; maxYaw = 0; } // Handled separately
+                    case North        -> { isNorth = true; minYaw = 0; maxYaw = 0; }
                     case South        -> { minYaw = -22.5f; maxYaw =  22.5f; }
                     case East         -> { minYaw = -112.5f; maxYaw = -67.5f; }
                     case West         -> { minYaw =  67.5f; maxYaw = 112.5f; }
@@ -1421,7 +1398,6 @@ public class RocketPilot extends Module {
                 }
 
                 if (isNorth) {
-                    // North is around +/-180. Range is [157.5, 202.5], which wraps.
                     targetDrunkYaw = 180f + ((float)Math.random() * 45f - 22.5f);
                 } else {
                     targetDrunkYaw = minYaw + (float)(Math.random() * (maxYaw - minYaw));
@@ -1462,6 +1438,10 @@ public class RocketPilot extends Module {
         ItemStack elytra = mc.player.getEquippedStack(EquipmentSlot.CHEST);
         if (elytra.isEmpty() || !elytra.isOf(Items.ELYTRA)) return false;
         if (Math.abs(mc.player.getPitch()) > 70) return false;
+        // FIX: Block rocket firing when the nether ceiling safety is active.
+        // Previously the ceiling would pitch the player down but rockets could still
+        // fire and push them back up into the bedrock.
+        if (ceilingWarningSent) return false;
         if (!needsTakeoffRocket && mc.player.getVelocity().horizontalLength() < 0.3) return false;
         return elytra.getDamage() < elytra.getMaxDamage() - 1;
     }

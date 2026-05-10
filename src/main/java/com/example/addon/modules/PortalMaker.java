@@ -21,7 +21,10 @@ import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.LeavesBlock;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.util.Hand;
@@ -342,20 +345,6 @@ public class PortalMaker extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Portal Entry Movement
-    //
-    // Fixes over the original:
-    //   1. getPortalOpeningCenter() aims at the interior air gap above the two
-    //      bottom obsidian, not the obsidian block centres.  The old version put
-    //      the target on/between the frame blocks, causing the player to walk
-    //      into the columns instead of the opening.
-    //   2. The approach direction used to read mc.player.getHorizontalFacing()
-    //      which lags a tick behind Rotations.rotate.  We now derive it from the
-    //      same (dx, dz) vector we already computed, so obstacle detection is
-    //      consistent with where the player is actually heading.
-    //   3. finishTimer is gone.  We just keep walking until isPlayerInPortal()
-    //      fires (handled in onTick) or the global stuck-timeout kills it.
-    //   4. Stuck threshold tightened to 0.0025 sq-dist (was 0.001, too loose on
-    //      a 20 Hz tick) and recovery reduced to 6 ticks so it reacts faster.
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void moveToPortal() {
@@ -393,7 +382,6 @@ public class PortalMaker extends Module {
         }
         lastPos = playerPos;
 
-        // Hard timeout: if stuck for more than 5 s give up.
         if (stuckTicks > 100) {
             error("Stuck trying to enter portal — stopping.");
             stopMovement();
@@ -402,18 +390,14 @@ public class PortalMaker extends Module {
         }
 
         // ── Horizontal vector toward the portal OPENING ───────────────────────
-        double dx       = portalCenter.x - playerPos.x;
-        double dz       = portalCenter.z - playerPos.z;
-        double hDistSq  = dx * dx + dz * dz;
-        double hDist    = Math.sqrt(hDistSq);
+        double dx      = portalCenter.x - playerPos.x;
+        double dz      = portalCenter.z - playerPos.z;
+        double hDist   = Math.sqrt(dx * dx + dz * dz);
 
-        // Yaw directly toward the opening centre (horizontal).
         float targetYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-
-        // Always face the portal opening so Rotations drives the body yaw.
         Rotations.rotate(targetYaw, mc.player.getPitch());
 
-        float yawDiff  = MathHelper.wrapDegrees(targetYaw - mc.player.getYaw());
+        float   yawDiff = MathHelper.wrapDegrees(targetYaw - mc.player.getYaw());
         boolean aligned = Math.abs(yawDiff) < 30f;
 
         // ── Already inside portal blocks? ─────────────────────────────────────
@@ -433,9 +417,7 @@ public class PortalMaker extends Module {
             return;
         }
 
-        // ── Obstacle detection using the computed approach direction ───────────
-        // Derive cardinal from (dx, dz) — same vector as the yaw above — so
-        // footFront always looks through the opening, never at the frame column.
+        // ── Obstacle detection ─────────────────────────────────────────────────
         Direction approachDir    = directionFromVector(dx, dz);
         BlockPos  footFront      = mc.player.getBlockPos().offset(approachDir);
         BlockPos  headFront      = footFront.up();
@@ -446,6 +428,20 @@ public class PortalMaker extends Module {
         boolean gapAhead    = !footBlocked
                            && !mc.world.getBlockState(footFrontBelow).isSolidBlock(mc.world, footFrontBelow)
                            && !mc.world.getBlockState(footFrontBelow).isOf(Blocks.NETHER_PORTAL);
+
+        // ── Break through soft obstacles in path ──────────────────────────────
+        // Soul sand and leaves slow/stop the player but aren't worth jumping or
+        // scaffolding over — just punch through them on the way.
+        if (aligned) {
+            for (BlockPos pathBlock : new BlockPos[]{ footFront, headFront }) {
+                BlockState bs = mc.world.getBlockState(pathBlock);
+                if (isSoftObstacle(bs)) {
+                    mc.interactionManager.attackBlock(pathBlock,
+                        approachDir.getOpposite());
+                    mc.player.swingHand(Hand.MAIN_HAND);
+                }
+            }
+        }
 
         // ── Scaffold into a gap ───────────────────────────────────────────────
         if (scaffoldCooldown > 0) scaffoldCooldown--;
@@ -492,12 +488,6 @@ public class PortalMaker extends Module {
     // Geometry helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Returns the centre of the portal OPENING — the interior air column one
-     * block above the two bottom frame obsidian blocks, at eye level.
-     * Aiming here lets the player walk straight through the gap rather than
-     * into the obsidian frame columns on either side.
-     */
     private Vec3d getPortalOpeningCenter() {
         BlockPos p1 = portalFramePositions.get(0).up();
         BlockPos p2 = portalFramePositions.get(1).up();
@@ -508,7 +498,6 @@ public class PortalMaker extends Module {
         );
     }
 
-    /** Returns the cardinal Direction closest to the (dx, dz) approach vector. */
     private Direction directionFromVector(double dx, double dz) {
         if (Math.abs(dx) >= Math.abs(dz)) {
             return dx > 0 ? Direction.EAST : Direction.WEST;
@@ -518,14 +507,29 @@ public class PortalMaker extends Module {
     }
 
     /**
-     * Returns true only for genuinely solid obstacles.
-     * Air, replaceable blocks, and nether portal blocks are never obstacles.
+     * Returns true for blocks that are genuinely impassable and worth
+     * jumping/scaffolding over: solid, non-portal, non-soft blocks.
      */
     private boolean isHardObstacle(BlockPos pos) {
-        var state = mc.world.getBlockState(pos);
-        if (state.isAir() || state.isReplaceable()) return false;
-        if (state.isOf(Blocks.NETHER_PORTAL))       return false;
+        BlockState state = mc.world.getBlockState(pos);
+        if (state.isAir() || state.isReplaceable())        return false;
+        if (state.isOf(Blocks.NETHER_PORTAL))              return false;
+        if (isSoftObstacle(state))                         return false;
         return true;
+    }
+
+    /**
+     * Soft obstacles slow or marginally block the player but can be broken
+     * through by attacking.  The player should walk into these rather than
+     * jumping or scaffolding.
+     * <p>
+     * Covers: soul sand, soul soil, all overworld/nether/azalea leaf blocks.
+     */
+    private boolean isSoftObstacle(BlockState state) {
+        Block b = state.getBlock();
+        if (b == Blocks.SOUL_SAND || b == Blocks.SOUL_SOIL) return true;
+        if (state.getBlock() instanceof LeavesBlock)         return true;
+        return false;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

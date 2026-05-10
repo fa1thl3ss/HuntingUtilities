@@ -2,13 +2,16 @@ package com.example.addon.hud;
 
 import com.example.addon.HuntingUtilities;
 
-import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.registry.RegistryKey;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
@@ -24,6 +27,15 @@ public class PositionHud extends HudElement {
     private static final MinecraftClient mc = MinecraftClient.getInstance();
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
+        .name("scale")
+        .description("Scale of the HUD element.")
+        .defaultValue(1.0)
+        .min(0.25)
+        .sliderRange(0.25, 4.0)
+        .build()
+    );
 
     private final Setting<SettingColor> labelColor = sgGeneral.add(new ColorSetting.Builder()
         .name("label-color")
@@ -80,11 +92,13 @@ public class PositionHud extends HudElement {
     public void render(HudRenderer renderer) {
         if (mc.player == null) { setSize(0, 0); return; }
 
-        double padH       = 4;
-        double padV       = 2;
-        double rowGap     = 2;
-        double lineHeight = renderer.textHeight(false, 1);
-        double sepW       = renderer.textWidth(" | ", false, 1);
+        double s = scale.get();
+
+        double padH       = 4 * s;
+        double padV       = 2 * s;
+        double rowGap     = 2 * s;
+        double lineHeight = renderer.textHeight(false, s);
+        double sepW       = renderer.textWidth(" | ", false, s);
 
         BlockPos pos = mc.player.getBlockPos();
         int bx = pos.getX(), by = pos.getY(), bz = pos.getZ();
@@ -113,25 +127,25 @@ public class PositionHud extends HudElement {
         String yLabel = "Y: ", yVal = String.valueOf(by);
         String zLabel = "Z: ", zVal = String.valueOf(bz);
 
-        double line1W = renderer.textWidth(xLabel, false, 1) + renderer.textWidth(xVal, false, 1)
+        double line1W = renderer.textWidth(xLabel, false, s) + renderer.textWidth(xVal, false, s)
                       + sepW
-                      + renderer.textWidth(yLabel, false, 1) + renderer.textWidth(yVal, false, 1)
+                      + renderer.textWidth(yLabel, false, s) + renderer.textWidth(yVal, false, s)
                       + sepW
-                      + renderer.textWidth(zLabel, false, 1) + renderer.textWidth(zVal, false, 1);
+                      + renderer.textWidth(zLabel, false, s) + renderer.textWidth(zVal, false, s);
 
         // ── Build line 2: nether/overworld coords ─────────────────────────────
         // Format: Nether: X: 12 | Z: -25   (Y not shown — same level)
         String nxLabel = "X: ", nxVal = String.valueOf(nx);
         String nzLabel = "Z: ", nzVal = String.valueOf(nz);
 
-        double line2TextW = renderer.textWidth(netherLineLabel, false, 1)
-                          + renderer.textWidth(nxLabel, false, 1) + renderer.textWidth(nxVal, false, 1)
+        double line2TextW = renderer.textWidth(netherLineLabel, false, s)
+                          + renderer.textWidth(nxLabel, false, s) + renderer.textWidth(nxVal, false, s)
                           + sepW
-                          + renderer.textWidth(nzLabel, false, 1) + renderer.textWidth(nzVal, false, 1);
+                          + renderer.textWidth(nzLabel, false, s) + renderer.textWidth(nzVal, false, s);
 
         boolean hasLine2 = showNether.get() && !inEnd;
 
-        double maxW  = hasLine2 ? Math.max(line1W, line2TextW) : line1W;
+        double maxW   = hasLine2 ? Math.max(line1W, line2TextW) : line1W;
         double totalW = maxW + padH * 2;
         int lineCount = hasLine2 ? 2 : 1;
         double totalH = lineCount * lineHeight + (lineCount - 1) * rowGap + padV * 2;
@@ -143,14 +157,14 @@ public class PositionHud extends HudElement {
             renderer.quad(x, rowY1 - 1, line1BoxW, lineHeight + 2, backgroundColor.get());
 
         double cx = x + padH;
-        renderer.text(xLabel, cx, rowY1, labelColor.get(),     false, 1); cx += renderer.textWidth(xLabel, false, 1);
-        renderer.text(xVal,   cx, rowY1, valueColor.get(),     false, 1); cx += renderer.textWidth(xVal,   false, 1);
-        renderer.text(" | ",  cx, rowY1, separatorColor.get(), false, 1); cx += sepW;
-        renderer.text(yLabel, cx, rowY1, labelColor.get(),     false, 1); cx += renderer.textWidth(yLabel, false, 1);
-        renderer.text(yVal,   cx, rowY1, valueColor.get(),     false, 1); cx += renderer.textWidth(yVal,   false, 1);
-        renderer.text(" | ",  cx, rowY1, separatorColor.get(), false, 1); cx += sepW;
-        renderer.text(zLabel, cx, rowY1, labelColor.get(),     false, 1); cx += renderer.textWidth(zLabel, false, 1);
-        renderer.text(zVal,   cx, rowY1, valueColor.get(),     false, 1);
+        renderer.text(xLabel, cx, rowY1, labelColor.get(),     false, s); cx += renderer.textWidth(xLabel, false, s);
+        renderer.text(xVal,   cx, rowY1, valueColor.get(),     false, s); cx += renderer.textWidth(xVal,   false, s);
+        renderer.text(" | ",  cx, rowY1, separatorColor.get(), false, s); cx += sepW;
+        renderer.text(yLabel, cx, rowY1, labelColor.get(),     false, s); cx += renderer.textWidth(yLabel, false, s);
+        renderer.text(yVal,   cx, rowY1, valueColor.get(),     false, s); cx += renderer.textWidth(yVal,   false, s);
+        renderer.text(" | ",  cx, rowY1, separatorColor.get(), false, s); cx += sepW;
+        renderer.text(zLabel, cx, rowY1, labelColor.get(),     false, s); cx += renderer.textWidth(zLabel, false, s);
+        renderer.text(zVal,   cx, rowY1, valueColor.get(),     false, s);
 
         // ── Draw line 2 ───────────────────────────────────────────────────────
         if (hasLine2) {
@@ -160,12 +174,12 @@ public class PositionHud extends HudElement {
                 renderer.quad(x, rowY2 - 1, line2BoxW, lineHeight + 2, backgroundColor.get());
 
             cx = x + padH;
-            renderer.text(netherLineLabel, cx, rowY2, netherLabelColor.get(), false, 1); cx += renderer.textWidth(netherLineLabel, false, 1);
-            renderer.text(nxLabel, cx, rowY2, labelColor.get(),     false, 1); cx += renderer.textWidth(nxLabel, false, 1);
-            renderer.text(nxVal,   cx, rowY2, valueColor.get(),     false, 1); cx += renderer.textWidth(nxVal,   false, 1);
-            renderer.text(" | ",   cx, rowY2, separatorColor.get(), false, 1); cx += sepW;
-            renderer.text(nzLabel, cx, rowY2, labelColor.get(),     false, 1); cx += renderer.textWidth(nzLabel, false, 1);
-            renderer.text(nzVal,   cx, rowY2, valueColor.get(),     false, 1);
+            renderer.text(netherLineLabel, cx, rowY2, netherLabelColor.get(), false, s); cx += renderer.textWidth(netherLineLabel, false, s);
+            renderer.text(nxLabel, cx, rowY2, labelColor.get(),     false, s); cx += renderer.textWidth(nxLabel, false, s);
+            renderer.text(nxVal,   cx, rowY2, valueColor.get(),     false, s); cx += renderer.textWidth(nxVal,   false, s);
+            renderer.text(" | ",   cx, rowY2, separatorColor.get(), false, s); cx += sepW;
+            renderer.text(nzLabel, cx, rowY2, labelColor.get(),     false, s); cx += renderer.textWidth(nzLabel, false, s);
+            renderer.text(nzVal,   cx, rowY2, valueColor.get(),     false, s);
         }
 
         setSize(totalW, totalH);

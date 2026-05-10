@@ -3,7 +3,11 @@ package com.example.addon.hud;
 import com.example.addon.HuntingUtilities;
 import com.example.addon.modules.PortalTracker;
 
-import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
@@ -20,6 +24,15 @@ public class PortalTrackerHud extends HudElement {
     );
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
+        .name("scale")
+        .description("Scale of the HUD element.")
+        .defaultValue(1.0)
+        .min(0.25)
+        .sliderRange(0.25, 4.0)
+        .build()
+    );
 
     private final Setting<SettingColor> labelColor = sgGeneral.add(new ColorSetting.Builder()
         .name("label-color")
@@ -67,10 +80,12 @@ public class PortalTrackerHud extends HudElement {
             return;
         }
 
-        double padH       = 4;
-        double padV       = 2;
-        double lineHeight = renderer.textHeight(false, 1);
-        double sepW       = renderer.textWidth(" | ", false, 1);
+        double s = scale.get();
+
+        double padH       = 4 * s;
+        double padV       = 2 * s;
+        double lineHeight = renderer.textHeight(false, s);
+        double sepW       = renderer.textWidth(" | ", false, s);
 
         // Found = live area count (resets as portals leave range)
         // Created = ongoing session total (never resets mid-session)
@@ -79,11 +94,11 @@ public class PortalTrackerHud extends HudElement {
         String createdLabel = "Portals Created: ";
         String createdValue = String.valueOf(tracker.getTotalCreated());
 
-        double totalTextW = renderer.textWidth(foundLabel,   false, 1)
-                          + renderer.textWidth(foundValue,   false, 1)
+        double totalTextW = renderer.textWidth(foundLabel,   false, s)
+                          + renderer.textWidth(foundValue,   false, s)
                           + sepW
-                          + renderer.textWidth(createdLabel, false, 1)
-                          + renderer.textWidth(createdValue, false, 1);
+                          + renderer.textWidth(createdLabel, false, s)
+                          + renderer.textWidth(createdValue, false, s);
 
         double totalW = totalTextW + padH * 2;
         double totalH = lineHeight + padV * 2;
@@ -94,11 +109,11 @@ public class PortalTrackerHud extends HudElement {
         double cx   = x + padH;
         double rowY = y + padV;
 
-        renderer.text(foundLabel,   cx, rowY, labelColor.get(),     false, 1); cx += renderer.textWidth(foundLabel,   false, 1);
-        renderer.text(foundValue,   cx, rowY, valueColor.get(),     false, 1); cx += renderer.textWidth(foundValue,   false, 1);
-        renderer.text(" | ",        cx, rowY, separatorColor.get(), false, 1); cx += sepW;
-        renderer.text(createdLabel, cx, rowY, labelColor.get(),     false, 1); cx += renderer.textWidth(createdLabel, false, 1);
-        renderer.text(createdValue, cx, rowY, valueColor.get(),     false, 1);
+        renderer.text(foundLabel,   cx, rowY, labelColor.get(),     false, s); cx += renderer.textWidth(foundLabel,   false, s);
+        renderer.text(foundValue,   cx, rowY, valueColor.get(),     false, s); cx += renderer.textWidth(foundValue,   false, s);
+        renderer.text(" | ",        cx, rowY, separatorColor.get(), false, s); cx += sepW;
+        renderer.text(createdLabel, cx, rowY, labelColor.get(),     false, s); cx += renderer.textWidth(createdLabel, false, s);
+        renderer.text(createdValue, cx, rowY, valueColor.get(),     false, s);
 
         setSize(totalW, totalH);
     }
