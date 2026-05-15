@@ -145,7 +145,7 @@ public class PearlPulse extends Module {
     private final Setting<CapPosition> capPosition = sgCap.add(new EnumSetting.Builder<CapPosition>()
         .name("cap-position")
         .description("Where to draw the flat marker box: at the bottom of the column, " +
-                     "the top (or pearl position), both, or none.")
+                     "the top (pearl position), both, or none.")
         .defaultValue(CapPosition.BOTTOM)
         .build()
     );
@@ -200,7 +200,7 @@ public class PearlPulse extends Module {
 
     private final Setting<Boolean> soundEnabled = sgSound.add(new BoolSetting.Builder()
         .name("sound-ping")
-        .description("Play a sound when a new bubble column or pearl is discovered.")
+        .description("Play a sound when a new stasis pearl is discovered.")
         .defaultValue(true)
         .build()
     );
@@ -226,8 +226,7 @@ public class PearlPulse extends Module {
     private final AtomicReference<Map<String, Vec3d[]>> columnLines =
         new AtomicReference<>(Collections.emptyMap());
 
-    private final Set<Integer> seenPearlIds   = Collections.synchronizedSet(new HashSet<>());
-    private final Set<String>  seenColumnKeys = Collections.synchronizedSet(new HashSet<>());
+    private final Set<Integer> seenPearlIds = Collections.synchronizedSet(new HashSet<>());
 
     private final AtomicBoolean scanPending = new AtomicBoolean(false);
     private final AtomicBoolean pingQueued  = new AtomicBoolean(false);
@@ -240,7 +239,16 @@ public class PearlPulse extends Module {
 
     public PearlPulse() {
         super(HuntingUtilities.CATEGORY, "PearlPulse",
-            "Detects nearby bubble column stacks and floating stasis pearls.");
+            "Detects nearby stasis pearls sitting above bubble columns.");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Public accessors
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Returns the current detection range setting value. Used by PearlCounterHud. */
+    public int getRange() {
+        return range.get();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -251,7 +259,6 @@ public class PearlPulse extends Module {
     public void onActivate() {
         columnLines.set(Collections.emptyMap());
         seenPearlIds.clear();
-        seenColumnKeys.clear();
         pingQueued.set(false);
         scanPending.set(false);
         tickCounter = 0;
@@ -261,7 +268,6 @@ public class PearlPulse extends Module {
     public void onDeactivate() {
         columnLines.set(Collections.emptyMap());
         seenPearlIds.clear();
-        seenColumnKeys.clear();
         pingQueued.set(false);
         scanPending.set(false);
     }
@@ -273,8 +279,9 @@ public class PearlPulse extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
-        if (mc.world.getRegistryKey() == World.NETHER) return;
+        if (mc.world.getRegistryKey() == World.NETHER) return; // Stasis pearls don't exist in the Nether
 
+        // Fire any queued sound ping on the main thread.
         if (pingQueued.compareAndSet(true, false) && soundEnabled.get()) {
             mc.getSoundManager().play(PositionedSoundInstance.master(
                 SoundEvents.BLOCK_BEACON_ACTIVATE,
@@ -283,14 +290,23 @@ public class PearlPulse extends Module {
             ));
         }
 
+        // Ping only when a pearl is newly seen AND it is above a known column.
+        Map<String, Vec3d[]> lines = columnLines.get();
         for (Entity e : mc.world.getEntities()) {
-            if (e.getType() == EntityType.ENDER_PEARL
-                    && mc.player.distanceTo(e) <= range.get()
-                    && seenPearlIds.add(e.getId())) {
+            if (e.getType() != EntityType.ENDER_PEARL) continue;
+            if (mc.player.distanceTo(e) > range.get()) continue;
+
+            int    px  = (int) Math.floor(e.getX());
+            int    pz  = (int) Math.floor(e.getZ());
+            String key = px + "," + pz;
+
+            // Only count it as a new discovery if it is over a known column.
+            if (lines.containsKey(key) && seenPearlIds.add(e.getId())) {
                 pingQueued.set(true);
             }
         }
 
+        // Trigger background column scan on interval.
         tickCounter++;
         if (tickCounter < scanInterval.get()) return;
         tickCounter = 0;
@@ -327,7 +343,6 @@ public class PearlPulse extends Module {
     private void runColumnScan(BlockPos origin, int r, Map<Long, WorldChunk> chunks) {
         Map<String, int[]>   yExtents = new HashMap<>();
         Map<String, Vec3d[]> newLines = new LinkedHashMap<>();
-        boolean              ping     = false;
 
         int minX = origin.getX() - r, maxX = origin.getX() + r;
         int minY = Math.max(origin.getY() - r, -64);
@@ -339,8 +354,7 @@ public class PearlPulse extends Module {
                 WorldChunk chunk = chunks.get(ChunkPos.toLong(x >> 4, z >> 4));
                 if (chunk == null) continue;
 
-                // Pass 1: collect the Y extents of any bubble column blocks in
-                // this (x, z) stack that fall within the scan window.
+                // Collect Y extents of bubble column blocks in this (x, z) stack.
                 int lowestY  = Integer.MAX_VALUE;
                 int highestY = Integer.MIN_VALUE;
                 for (int y = minY; y <= maxY; y++) {
@@ -350,14 +364,11 @@ public class PearlPulse extends Module {
                     if (y > highestY) highestY = y;
                 }
 
-                if (lowestY == Integer.MAX_VALUE) continue; // no bubble columns here
+                if (lowestY == Integer.MAX_VALUE) continue;
 
-                // Pass 2: walk downward from the lowest visible bubble column
-                // block to find the true source block. This correctly handles
-                // the case where the player is flying high and minY starts
-                // mid-column — the soul-sand/magma source may be below minY.
+                // Walk downward to find the true source block below the column.
                 int srcY      = lowestY - 1;
-                int srcYfloor = Math.max(srcY - 384, -64); // safety bound
+                int srcYfloor = Math.max(srcY - 384, -64);
                 while (srcY >= srcYfloor) {
                     if (chunk.getBlockState(new BlockPos(x, srcY, z)).getBlock()
                             == Blocks.BUBBLE_COLUMN) {
@@ -367,8 +378,7 @@ public class PearlPulse extends Module {
                     }
                 }
 
-                // srcY is now the Y of the block immediately below the full
-                // column. Accept only soul-sand sources (upward columns).
+                // Accept only soul-sand sources (upward columns).
                 if (chunk.getBlockState(new BlockPos(x, srcY, z)).getBlock()
                         != Blocks.SOUL_SAND) continue;
 
@@ -391,11 +401,9 @@ public class PearlPulse extends Module {
                 new Vec3d(cx, e[1],     cz),
                 new Vec3d(cx, e[2] + 1, cz)
             });
-            if (seenColumnKeys.add(entry.getKey())) ping = true;
         }
 
         columnLines.set(newLines);
-        if (ping) pingQueued.set(true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -414,7 +422,7 @@ public class PearlPulse extends Module {
 
         int r = range.get();
 
-        // Resolve pearl Y positions for columns that have a stasis pearl.
+        // Map each column key to the Y position of its stasis pearl (if any).
         Map<String, Double>  colKeyToPearlY = new HashMap<>();
         Map<String, Vec3d[]> lines          = columnLines.get();
 
@@ -448,13 +456,16 @@ public class PearlPulse extends Module {
         boolean      capBloom = capGlow.get();
 
         for (Map.Entry<String, Vec3d[]> entry : lines.entrySet()) {
-            Vec3d[] line   = entry.getValue();
-            Double  pearlY = colKeyToPearlY.get(entry.getKey());
+            Double pearlY = colKeyToPearlY.get(entry.getKey());
 
+            // Only render columns that have a stasis pearl sitting above them.
+            if (pearlY == null) continue;
+
+            Vec3d[] line   = entry.getValue();
             double cx      = line[0].x;
             double cz      = line[0].z;
             double bottomY = line[0].y;
-            double topY    = (pearlY != null) ? pearlY : line[1].y;
+            double topY    = pearlY;
 
             // ── Beam ─────────────────────────────────────────────────────────
             if (doBeam) {
@@ -484,7 +495,7 @@ public class PearlPulse extends Module {
                                double cx, double bottomY, double cz, double topY,
                                SettingColor core, SettingColor glow,
                                double halfCore, double spread, int layers, int baseAlpha) {
-        // Bloom rings — Sides only, fading outward.
+        // Bloom rings — sides only, fading outward.
         for (int i = layers; i >= 1; i--) {
             double expansion = spread * i;
             int    alpha     = Math.max(4, (int)(baseAlpha * (1.0 - (double)(i - 1) / layers)));
