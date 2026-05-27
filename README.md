@@ -5,37 +5,37 @@
 Currently in **BETA** — expect bugs, incomplete features, and frequent updates.
 
 Modules List;
-Dungeon Assistant
-Elytra Assistant
-EndSafe
-Graveyard
-Handmold
-Illushine
-Iventory101
-Lava Marker
-Loot Lens
-Mendbot
-Mobanom
-Neighbourhood Watch
-Pearl Pulse
-Portal Maker
-Portal Tracker
-Rocket Pilot
-Server Healthcare System
-Sign Scanner
-Third Sight
-Time Throttle
-Tunnelers
+- Dungeon Assistant
+- Elytra Assistant
+- EndSafe
+- Graveyard
+- Handmold
+- Illushine
+- Iventory101
+- Lava Marker
+- Loot Lens
+- Mendbot
+- Mobanom
+- Neighbourhood Watch
+- Pearl Pulse
+- Portal Maker
+- Portal Tracker
+- Rocket Pilot
+- Server Healthcare System
+- Sign Scanner
+- Third Sight
+- Time Throttle
+- Tunnelers
 
 Hud List;
-Info Assistant
-Loot Lens
-Pearl Counter
-Portal Tracker
-Position
-Rocket Pilot
-Statistics Information
-Time Throttle
+- Info Assistant
+- Loot Lens
+- Pearl Counter
+- Portal Tracker
+- Position
+- Rocket Pilot
+- Statistics Information
+- Time Throttle
 
 More modules/huds coming soon — 
 
