@@ -45,7 +45,7 @@ import net.minecraft.world.chunk.WorldChunk;
 public class Tunnelers extends Module {
 
     // ------------------------------------------------------------------ //
-    //  Highlight Style Enum                                                //
+    //  Enums                                                               //
     // ------------------------------------------------------------------ //
 
     /**
@@ -79,6 +79,13 @@ public class Tunnelers extends Module {
         LADDER_SHAFT
     }
 
+    /** Controls which vertical shaft types are detected and rendered. */
+    public enum ShaftMode {
+        Holes,
+        LadderShafts,
+        Both
+    }
+
     // Horizontal-only directions for tunnel BFS connectivity checks.
     private static final int[][] HORIZONTAL_DIRS = {
         { 1, 0, 0}, {-1, 0, 0},
@@ -93,10 +100,8 @@ public class Tunnelers extends Module {
     private final SettingGroup sgSpectral = settings.createGroup("Spectral");
     private final SettingGroup sg1x1      = settings.createGroup("1x1 Tunnels");
     private final SettingGroup sg1x2      = settings.createGroup("1x2 Tunnels");
-    private final SettingGroup sg2x2      = settings.createGroup("2x2 Tunnels");
-    private final SettingGroup sgHoles    = settings.createGroup("Holes");
     private final SettingGroup sgAbnormal = settings.createGroup("Abnormal Tunnels");
-    private final SettingGroup sgLadder   = settings.createGroup("Ladder Shafts");
+    private final SettingGroup sgShafts   = settings.createGroup("Shafts");
 
     // ------------------------------------------------------------------ //
     //  General                                                             //
@@ -237,93 +242,76 @@ public class Tunnelers extends Module {
         .build());
 
     // ------------------------------------------------------------------ //
-    //  2x2 Tunnels                                                         //
-    // ------------------------------------------------------------------ //
-
-    private final Setting<Boolean> find2x2 = sg2x2.add(new BoolSetting.Builder()
-        .name("find-2x2-tunnels")
-        .defaultValue(true)
-        .build());
-
-    private final Setting<Integer> min2x2Length = sg2x2.add(new IntSetting.Builder()
-        .name("min-length")
-        .description("Minimum length of a 2x2 tunnel to be rendered.")
-        .defaultValue(2).min(1).sliderMax(64)
-        .visible(find2x2::get)
-        .build());
-
-    private final Setting<SettingColor> color2x2 = sg2x2.add(new ColorSetting.Builder()
-        .name("color-2x2")
-        .defaultValue(new SettingColor(255, 165, 0, 75))
-        .visible(find2x2::get)
-        .build());
-
-    // ------------------------------------------------------------------ //
-    //  Holes                                                               //
-    // ------------------------------------------------------------------ //
-
-    private final Setting<Boolean> findHoles = sgHoles.add(new BoolSetting.Builder()
-        .name("find-holes")
-        .defaultValue(true)
-        .build());
-
-    private final Setting<Integer> minHoleHeight = sgHoles.add(new IntSetting.Builder()
-        .name("min-hole-height")
-        .description("Minimum shaft depth to be detected as a hole.")
-        .defaultValue(4).min(2).sliderMax(20)
-        .visible(findHoles::get)
-        .build());
-
-    private final Setting<SettingColor> colorHoles = sgHoles.add(new ColorSetting.Builder()
-        .name("color-holes")
-        .defaultValue(new SettingColor(0, 255, 255, 75))
-        .visible(findHoles::get)
-        .build());
-
-    // ------------------------------------------------------------------ //
-    //  Abnormal Tunnels                                                    //
+    //  Abnormal Tunnels (3x3, 4x4, 5x5, and 2x2)                         //
     // ------------------------------------------------------------------ //
 
     private final Setting<Boolean> findAbnormalTunnels = sgAbnormal.add(new BoolSetting.Builder()
         .name("find-abnormal-tunnels")
-        .description("Finds 3x3, 4x4, and 5x5 tunnels.")
+        .description("Finds 2x2, 3x3, 4x4, and 5x5 tunnels.")
         .defaultValue(true)
         .build());
 
     private final Setting<Integer> minAbnormalLength = sgAbnormal.add(new IntSetting.Builder()
         .name("min-length")
-        .description("Minimum length of an abnormal tunnel to be rendered.")
+        .description("Minimum length of a 2x2 or larger tunnel to be rendered.")
         .defaultValue(2).min(1).sliderMax(64)
         .visible(findAbnormalTunnels::get)
         .build());
 
     private final Setting<SettingColor> colorAbnormalTunnels = sgAbnormal.add(new ColorSetting.Builder()
         .name("color-abnormal")
+        .description("Color for 3x3, 4x4, and 5x5 tunnels.")
         .defaultValue(new SettingColor(255, 0, 255, 75))
         .visible(findAbnormalTunnels::get)
         .build());
 
-    // ------------------------------------------------------------------ //
-    //  Ladder Shafts                                                       //
-    // ------------------------------------------------------------------ //
+    // ── 2x2 sub-settings (within Abnormal group) ─────────────────────────────
 
-    private final Setting<Boolean> findLadderShafts = sgLadder.add(new BoolSetting.Builder()
-        .name("find-ladder-shafts")
-        .description("Finds vertical 1x1 shafts with ladders on the wall.")
-        .defaultValue(true)
+    private final Setting<SettingColor> color2x2 = sgAbnormal.add(new ColorSetting.Builder()
+        .name("color-2x2")
+        .description("Color for 2x2 tunnels specifically.")
+        .defaultValue(new SettingColor(255, 165, 0, 75))
+        .visible(findAbnormalTunnels::get)
         .build());
 
-    private final Setting<Integer> minLadderHeight = sgLadder.add(new IntSetting.Builder()
+    // ------------------------------------------------------------------ //
+    //  Shafts (Holes + Ladder Shafts)                                     //
+    // ------------------------------------------------------------------ //
+
+    private final Setting<ShaftMode> shaftMode = sgShafts.add(new EnumSetting.Builder<ShaftMode>()
+        .name("shaft-mode")
+        .description("Which vertical shaft types to detect: Holes, LadderShafts, or Both.")
+        .defaultValue(ShaftMode.Both)
+        .build());
+
+    // ── Holes ─────────────────────────────────────────────────────────────────
+
+    private final Setting<Integer> minHoleHeight = sgShafts.add(new IntSetting.Builder()
+        .name("min-hole-height")
+        .description("Minimum shaft depth to be detected as a hole.")
+        .defaultValue(4).min(2).sliderMax(20)
+        .visible(() -> shaftMode.get() == ShaftMode.Holes || shaftMode.get() == ShaftMode.Both)
+        .build());
+
+    private final Setting<SettingColor> colorHoles = sgShafts.add(new ColorSetting.Builder()
+        .name("color-holes")
+        .defaultValue(new SettingColor(0, 255, 255, 75))
+        .visible(() -> shaftMode.get() == ShaftMode.Holes || shaftMode.get() == ShaftMode.Both)
+        .build());
+
+    // ── Ladder Shafts ─────────────────────────────────────────────────────────
+
+    private final Setting<Integer> minLadderHeight = sgShafts.add(new IntSetting.Builder()
         .name("min-ladder-height")
         .description("Minimum consecutive ladder blocks to count as a shaft.")
         .defaultValue(4).min(2).sliderMax(20)
-        .visible(findLadderShafts::get)
+        .visible(() -> shaftMode.get() == ShaftMode.LadderShafts || shaftMode.get() == ShaftMode.Both)
         .build());
 
-    private final Setting<SettingColor> colorLadderShafts = sgLadder.add(new ColorSetting.Builder()
+    private final Setting<SettingColor> colorLadderShafts = sgShafts.add(new ColorSetting.Builder()
         .name("color-ladder-shafts")
         .defaultValue(new SettingColor(0, 255, 0, 75))
-        .visible(findLadderShafts::get)
+        .visible(() -> shaftMode.get() == ShaftMode.LadderShafts || shaftMode.get() == ShaftMode.Both)
         .build());
 
     // ------------------------------------------------------------------ //
@@ -444,17 +432,16 @@ public class Tunnelers extends Module {
 
         final Map<BlockPos, TunnelType> locSnapshot = new HashMap<>(locations);
         final int px = snapPX, py = snapPY, pz = snapPZ;
-        final double maxDistSq        = (double)(range.get() * 16) * (range.get() * 16);
-        final int minLength1x1        = min1x1Length.get();
-        final int minLength1x2        = min1x2Length.get();
-        final int minLength2x2        = min2x2Length.get();
-        final int minLengthAbnormal   = minAbnormalLength.get();
+        final double maxDistSq      = (double)(range.get() * 16) * (range.get() * 16);
+        final int minLength1x1      = min1x1Length.get();
+        final int minLength1x2      = min1x2Length.get();
+        final int minLengthAbnormal = minAbnormalLength.get();
 
         executor.submit(() -> {
             try {
                 List<MergedBox> merged = buildMergedBoxes(
                     locSnapshot, px, py, pz, maxDistSq,
-                    minLength1x1, minLength1x2, minLength2x2, minLengthAbnormal);
+                    minLength1x1, minLength1x2, minLengthAbnormal);
                 renderSnapshot = merged;
             } finally {
                 mergeScheduled.set(false);
@@ -470,7 +457,7 @@ public class Tunnelers extends Module {
             Map<BlockPos, TunnelType> locs,
             int px, int py, int pz,
             double maxDistSq, int minLength1x1,
-            int minLength1x2, int minLength2x2, int minLengthAbnormal
+            int minLength1x2, int minLengthAbnormal
     ) {
         if (locs.isEmpty()) return Collections.emptyList();
 
@@ -490,7 +477,7 @@ public class Tunnelers extends Module {
 
         filterTunnelTypeByLength(TunnelType.TUNNEL_1x1,      minLength1x1,      coordsByType, remaining);
         filterTunnelTypeByLength(TunnelType.TUNNEL_1x2,      minLength1x2,      coordsByType, remaining);
-        filterTunnelTypeByLength(TunnelType.TUNNEL_2x2,      minLength2x2,      coordsByType, remaining);
+        filterTunnelTypeByLength(TunnelType.TUNNEL_2x2,      minLengthAbnormal, coordsByType, remaining);
         filterTunnelTypeByLength(TunnelType.ABNORMAL_TUNNEL, minLengthAbnormal, coordsByType, remaining);
 
         List<MergedBox> boxes = new ArrayList<>();
@@ -681,9 +668,13 @@ public class Tunnelers extends Module {
             if (chunk == null) continue;
 
             inFlight.add(cp);
+
+            boolean doHoles   = shaftMode.get() == ShaftMode.Holes   || shaftMode.get() == ShaftMode.Both;
+            boolean doLadders = shaftMode.get() == ShaftMode.LadderShafts || shaftMode.get() == ShaftMode.Both;
+
             ScanConfig config = new ScanConfig(
-                find1x1.get(), find1x2.get(), find2x2.get(),
-                findHoles.get(), findAbnormalTunnels.get(), findLadderShafts.get(),
+                find1x1.get(), find1x2.get(), findAbnormalTunnels.get(), findAbnormalTunnels.get(),
+                doHoles, doLadders,
                 minHoleHeight.get(), minLadderHeight.get(),
                 mc.world.getBottomY(), mc.world.getBottomY() + mc.world.getHeight()
             );
@@ -785,15 +776,16 @@ public class Tunnelers extends Module {
             results.put(new BlockPos(wx, wy + 1, wz), TunnelType.TUNNEL_1x2);
             results.put(new BlockPos(wx, wy + 2, wz), TunnelType.TUNNEL_1x2);
         }
+        if (config.do2x2 && is2x2Tunnel(wx, wy, wz, ctx))
+            for (int dx = 0; dx < 2; dx++) for (int dy = 1; dy <= 2; dy++) for (int dz = 0; dz < 2; dz++)
+                results.put(new BlockPos(wx + dx, wy + dy, wz + dz), TunnelType.TUNNEL_2x2);
+
         if (config.doAbnormal) {
             int sz = getAbnormalTunnelSize(wx, wy, wz, ctx);
             if (sz > 0)
                 for (int dx = 0; dx < sz; dx++) for (int dy = 1; dy <= sz; dy++) for (int dz = 0; dz < sz; dz++)
                     results.put(new BlockPos(wx + dx, wy + dy, wz + dz), TunnelType.ABNORMAL_TUNNEL);
         }
-        if (config.do2x2 && is2x2Tunnel(wx, wy, wz, ctx))
-            for (int dx = 0; dx < 2; dx++) for (int dy = 1; dy <= 2; dy++) for (int dz = 0; dz < 2; dz++)
-                results.put(new BlockPos(wx + dx, wy + dy, wz + dz), TunnelType.TUNNEL_2x2);
     }
 
     // ------------------------------------------------------------------ //
@@ -1035,11 +1027,6 @@ public class Tunnelers extends Module {
     //  Glow rendering                                                      //
     // ------------------------------------------------------------------ //
 
-    /**
-     * Renders layered bloom quads expanding outward from the box surface, then
-     * draws the solid box on top. Alpha uses a quadratic falloff so the core is
-     * vivid and the outer halos drop off sharply, matching the filled-sides look.
-     */
     private void renderGlowBox(Render3DEvent event, MergedBox box,
             SettingColor faded, float fadeFrac, ShapeMode sm) {
 
@@ -1049,7 +1036,7 @@ public class Tunnelers extends Module {
 
         for (int i = layers; i >= 1; i--) {
             double expansion  = spread * i;
-            double t          = (double)(i - 1) / layers;         // 0 = innermost, 1 = outermost
+            double t          = (double)(i - 1) / layers;
             int    layerAlpha = Math.max(4, (int)(baseAlpha * (1.0 - t * t)));
             layerAlpha = Math.max(4, (int)(layerAlpha * fadeFrac));
 
@@ -1069,13 +1056,6 @@ public class Tunnelers extends Module {
     //  Spectral rendering                                                  //
     // ------------------------------------------------------------------ //
 
-    /**
-     * Renders a crisp outline box slightly expanded beyond the tunnel surface,
-     * mimicking the spectral arrow / vanilla glowing effect.
-     *
-     * Line alpha and fill alpha are scaled by both the fade fraction and the
-     * shared per-frame pulse multiplier so all boxes breathe in unison.
-     */
     private void renderSpectralBox(Render3DEvent event, MergedBox box,
             SettingColor faded, float fadeFrac, double pulseMult, ShapeMode sm) {
 
@@ -1086,14 +1066,12 @@ public class Tunnelers extends Module {
         int lineAlpha = Math.max(4, (int)(spectralLineAlpha.get() * fadeFrac * pulseMult));
         int fillAlpha = Math.max(0, (int)(spectralFillAlpha.get() * fadeFrac * pulseMult));
 
-        // Faint interior fill — uses the box's own type color tinted.
         if (fillAlpha > 0) {
             event.renderer.box(ex1, ey1, ez1, ex2, ey2, ez2,
                 withAlpha(faded, fillAlpha), withAlpha(faded, 0),
                 ShapeMode.Sides, 0);
         }
 
-        // Crisp lines-only outline — no filled sides, just the edges.
         event.renderer.box(ex1, ey1, ez1, ex2, ey2, ez2,
             withAlpha(faded, 0), withAlpha(faded, lineAlpha),
             ShapeMode.Lines, 0);
@@ -1105,13 +1083,14 @@ public class Tunnelers extends Module {
 
     private SettingColor getColor(TunnelType type) {
         if (type == null) return null;
+        ShaftMode sm = shaftMode.get();
         return switch (type) {
             case TUNNEL_1x1      -> find1x1.get()            ? color1x1.get()             : null;
             case TUNNEL_1x2      -> find1x2.get()            ? color1x2.get()             : null;
-            case TUNNEL_2x2      -> find2x2.get()            ? color2x2.get()             : null;
-            case HOLE            -> findHoles.get()           ? colorHoles.get()           : null;
+            case TUNNEL_2x2      -> findAbnormalTunnels.get() ? color2x2.get()             : null;
             case ABNORMAL_TUNNEL -> findAbnormalTunnels.get() ? colorAbnormalTunnels.get() : null;
-            case LADDER_SHAFT    -> findLadderShafts.get()    ? colorLadderShafts.get()    : null;
+            case HOLE            -> (sm == ShaftMode.Holes   || sm == ShaftMode.Both) ? colorHoles.get()        : null;
+            case LADDER_SHAFT    -> (sm == ShaftMode.LadderShafts || sm == ShaftMode.Both) ? colorLadderShafts.get() : null;
         };
     }
 
@@ -1124,7 +1103,7 @@ public class Tunnelers extends Module {
     // ------------------------------------------------------------------ //
 
     private record ScanConfig(
-        boolean do1x1, boolean do1x2, boolean do2x2, boolean doHoles, boolean doAbnormal, boolean doLadder,
+        boolean do1x1, boolean do1x2, boolean do2x2, boolean doAbnormal, boolean doHoles, boolean doLadder,
         int holeDepth, int ladderMin, int minY, int maxY
     ) {}
 

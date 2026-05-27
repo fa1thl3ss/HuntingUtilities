@@ -7,7 +7,6 @@ import java.util.Set;
 import com.example.addon.HuntingUtilities;
 
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
-import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
@@ -15,6 +14,7 @@ import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
@@ -39,15 +39,19 @@ public class NeighbourhoodWatch extends Module {
 
     public enum PlayerStatus { Friend, Enemy, Proxy, Other }
 
+    public enum TabEvent   { Join, Leave, Both }
+    public enum TabFilter  { Friends, Enemies, Proxies, Others, All }
+    public enum FilterMode { Censor, AutoIgnore }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Setting Groups
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final SettingGroup sgSafety     = settings.createGroup("Safety");
-    private final SettingGroup sgAutoIgnore = settings.createGroup("Auto Ignore");
-    private final SettingGroup sgTracking   = settings.createGroup("Player Tracking");
-    private final SettingGroup sgFriends    = settings.createGroup("Friends & Enemies");
-    private final SettingGroup sgTabList    = settings.createGroup("Tab List Monitoring");
+    private final SettingGroup sgSafety      = settings.createGroup("Safety");
+    private final SettingGroup sgMsgControl  = settings.createGroup("Message Control");
+    private final SettingGroup sgTracking    = settings.createGroup("Player Tracking");
+    private final SettingGroup sgFriends     = settings.createGroup("Friends & Enemies");
+    private final SettingGroup sgTabList     = settings.createGroup("Tab List Monitoring");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Safety
@@ -85,37 +89,35 @@ public class NeighbourhoodWatch extends Module {
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Auto Ignore
+    // Settings — Message Control
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final Setting<Boolean> autoIgnore = sgAutoIgnore.add(new BoolSetting.Builder()
-        .name("auto-ignore")
-        .description("Runs /ignorehard on players who say certain keywords in chat.")
-        .defaultValue(false)
+    private final Setting<FilterMode> filterMode = sgMsgControl.add(new EnumSetting.Builder<FilterMode>()
+        .name("mode")
+        .description("Censor: replaces matched keywords with XXXX. AutoIgnore: runs /ignorehard on the sender.")
+        .defaultValue(FilterMode.Censor)
         .build()
     );
 
-    private final Setting<List<String>> ignoreKeywords = sgAutoIgnore.add(new StringListSetting.Builder()
+    private final Setting<List<String>> ignoreKeywords = sgMsgControl.add(new StringListSetting.Builder()
         .name("keywords")
-        .description("Players who use any of these words in their message will be /ignorehard'd.")
+        .description("Words to act on. Censor mode redacts them; AutoIgnore mode silences the sender.")
         .defaultValue(List.of())
-        .visible(autoIgnore::get)
         .build()
     );
 
-    private final Setting<Boolean> ignoreCaseSensitive = sgAutoIgnore.add(new BoolSetting.Builder()
+    private final Setting<Boolean> ignoreCaseSensitive = sgMsgControl.add(new BoolSetting.Builder()
         .name("case-sensitive")
         .description("Match keywords with case sensitivity.")
         .defaultValue(false)
-        .visible(autoIgnore::get)
         .build()
     );
 
-    private final Setting<Boolean> ignoreNotify = sgAutoIgnore.add(new BoolSetting.Builder()
+    private final Setting<Boolean> ignoreNotify = sgMsgControl.add(new BoolSetting.Builder()
         .name("notify")
-        .description("Print a local message when a player is auto-ignored.")
+        .description("Print a local message when a player is auto-ignored (AutoIgnore mode only).")
         .defaultValue(true)
-        .visible(autoIgnore::get)
+        .visible(() -> filterMode.get() == FilterMode.AutoIgnore)
         .build()
     );
 
@@ -138,27 +140,11 @@ public class NeighbourhoodWatch extends Module {
         .build()
     );
 
-    private final Setting<Boolean> trackFriends = sgTracking.add(new BoolSetting.Builder()
-        .name("track-friends").description("Highlight friends in range.")
-        .defaultValue(true).visible(trackPlayers::get)
-        .build()
-    );
-
-    private final Setting<Boolean> trackEnemies = sgTracking.add(new BoolSetting.Builder()
-        .name("track-enemies").description("Highlight enemies in range.")
-        .defaultValue(true).visible(trackPlayers::get)
-        .build()
-    );
-
-    private final Setting<Boolean> trackProxies = sgTracking.add(new BoolSetting.Builder()
-        .name("track-proxies").description("Highlight proxy accounts in range.")
-        .defaultValue(true).visible(trackPlayers::get)
-        .build()
-    );
-
-    private final Setting<Boolean> trackOthers = sgTracking.add(new BoolSetting.Builder()
-        .name("track-others").description("Highlight unknown players in range.")
-        .defaultValue(true).visible(trackPlayers::get)
+    private final Setting<TabFilter> trackFilter = sgTracking.add(new EnumSetting.Builder<TabFilter>()
+        .name("track-filter")
+        .description("Which player category to highlight and notify for.")
+        .defaultValue(TabFilter.Enemies)
+        .visible(trackPlayers::get)
         .build()
     );
 
@@ -217,46 +203,61 @@ public class NeighbourhoodWatch extends Module {
     // Settings — Friends & Enemies
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // ── Friends ───────────────────────────────────────────────────────────────
+
     private final Setting<List<String>> friends = sgFriends.add(new StringListSetting.Builder()
         .name("friends").description("Players treated as friends. Case-insensitive.")
         .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
-        .build()
-    );
-
-    private final Setting<List<String>> enemies = sgFriends.add(new StringListSetting.Builder()
-        .name("enemies").description("Players treated as enemies. Case-insensitive.")
-        .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
-        .build()
-    );
-
-    private final Setting<List<String>> proxies = sgFriends.add(new StringListSetting.Builder()
-        .name("proxies").description("Players treated as proxies. Case-insensitive.")
-        .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
+        .visible(() -> isFriendCategoryVisible())
         .build()
     );
 
     private final Setting<SettingColor> friendColor = sgFriends.add(new ColorSetting.Builder()
         .name("friend-color").description("Highlight color for friends.")
         .defaultValue(new SettingColor(0, 255, 0, 255))
-        .visible(trackPlayers::get).build()
+        .visible(() -> trackPlayers.get() && isFriendCategoryVisible())
+        .build()
+    );
+
+    // ── Enemies ───────────────────────────────────────────────────────────────
+
+    private final Setting<List<String>> enemies = sgFriends.add(new StringListSetting.Builder()
+        .name("enemies").description("Players treated as enemies. Case-insensitive.")
+        .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
+        .visible(() -> isEnemyCategoryVisible())
+        .build()
     );
 
     private final Setting<SettingColor> enemyColor = sgFriends.add(new ColorSetting.Builder()
         .name("enemy-color").description("Highlight color for enemies.")
         .defaultValue(new SettingColor(255, 0, 0, 255))
-        .visible(trackPlayers::get).build()
+        .visible(() -> trackPlayers.get() && isEnemyCategoryVisible())
+        .build()
+    );
+
+    // ── Proxies ───────────────────────────────────────────────────────────────
+
+    private final Setting<List<String>> proxies = sgFriends.add(new StringListSetting.Builder()
+        .name("proxies").description("Players treated as proxies. Case-insensitive.")
+        .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
+        .visible(() -> isProxyCategoryVisible())
+        .build()
     );
 
     private final Setting<SettingColor> proxyColor = sgFriends.add(new ColorSetting.Builder()
         .name("proxy-color").description("Highlight color for proxies.")
         .defaultValue(new SettingColor(255, 140, 0, 255))
-        .visible(trackPlayers::get).build()
+        .visible(() -> trackPlayers.get() && isProxyCategoryVisible())
+        .build()
     );
+
+    // ── Others ────────────────────────────────────────────────────────────────
 
     private final Setting<SettingColor> otherColor = sgFriends.add(new ColorSetting.Builder()
         .name("other-color").description("Highlight color for unknown players.")
         .defaultValue(new SettingColor(139, 0, 0, 255))
-        .visible(trackPlayers::get).build()
+        .visible(() -> trackPlayers.get() && isOtherCategoryVisible())
+        .build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -269,34 +270,20 @@ public class NeighbourhoodWatch extends Module {
         .defaultValue(false).build()
     );
 
-    private final Setting<Boolean> notifyOnJoin = sgTabList.add(new BoolSetting.Builder()
-        .name("notify-on-join").description("Notify when a player joins the server.")
-        .defaultValue(true).visible(monitorTabList::get).build()
+    private final Setting<TabEvent> tabEvent = sgTabList.add(new EnumSetting.Builder<TabEvent>()
+        .name("event")
+        .description("Which tab-list event to notify on.")
+        .defaultValue(TabEvent.Join)
+        .visible(monitorTabList::get)
+        .build()
     );
 
-    private final Setting<Boolean> notifyOnLeave = sgTabList.add(new BoolSetting.Builder()
-        .name("notify-on-leave").description("Notify when a player leaves the server.")
-        .defaultValue(true).visible(monitorTabList::get).build()
-    );
-
-    private final Setting<Boolean> tabNotifyFriends = sgTabList.add(new BoolSetting.Builder()
-        .name("notify-friends").description("Notify when a friend joins or leaves.")
-        .defaultValue(true).visible(monitorTabList::get).build()
-    );
-
-    private final Setting<Boolean> tabNotifyEnemies = sgTabList.add(new BoolSetting.Builder()
-        .name("notify-enemies").description("Notify when an enemy joins or leaves.")
-        .defaultValue(true).visible(monitorTabList::get).build()
-    );
-
-    private final Setting<Boolean> tabNotifyProxies = sgTabList.add(new BoolSetting.Builder()
-        .name("notify-proxies").description("Notify when a proxy joins or leaves.")
-        .defaultValue(true).visible(monitorTabList::get).build()
-    );
-
-    private final Setting<Boolean> tabNotifyOthers = sgTabList.add(new BoolSetting.Builder()
-        .name("notify-others").description("Notify when an unknown player joins or leaves.")
-        .defaultValue(false).visible(monitorTabList::get).build()
+    private final Setting<TabFilter> tabFilter = sgTabList.add(new EnumSetting.Builder<TabFilter>()
+        .name("notify-for")
+        .description("Which player category triggers a notification.")
+        .defaultValue(TabFilter.Enemies)
+        .visible(monitorTabList::get)
+        .build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -304,7 +291,6 @@ public class NeighbourhoodWatch extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private final Set<Integer> notifiedPlayers    = new HashSet<>();
-    // Rebuilt every tick — holds IDs of players currently being outlined.
     private final Set<Integer> activelyOutlined   = new HashSet<>();
     private final Set<String>  ignoredThisSession = new HashSet<>();
     private final Set<String>  playersInTab       = new HashSet<>();
@@ -318,7 +304,7 @@ public class NeighbourhoodWatch extends Module {
 
     public NeighbourhoodWatch() {
         super(HuntingUtilities.CATEGORY, "neighbourhood-watch",
-            "Manages player tracking, safety, and server monitoring.");
+            "Manages player tracking, safety, server monitoring, and keyword alerts.");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -339,8 +325,6 @@ public class NeighbourhoodWatch extends Module {
 
     @Override
     public void onDeactivate() {
-        // Clear glowing flag from every player we were highlighting so they
-        // don't stay lit up after the module is toggled off.
         if (mc.world != null) {
             for (Entity entity : mc.world.getEntities()) {
                 if (activelyOutlined.contains(entity.getId())) {
@@ -358,24 +342,22 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Tick — safety, tracking notifications, and outline shader management
+    // Tick
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
+
         if (tickDisconnectOnPlayer()) return;
         tickPlayerTracking();
         tickOutlineShader();
     }
 
-    /**
-     * Applies / removes the vanilla glowing flag and injects the per-status
-     * outline color into Meteor's RenderUtils.entityOutlineColors map so the
-     * OutlineEntityFeatureRenderer draws a proper mesh silhouette rather than a
-     * bounding box. Rebuilt from scratch every tick so stale entities are
-     * cleaned up immediately.
-     */
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Outline shader management
+    // ═══════════════════════════════════════════════════════════════════════════
+
     private void tickOutlineShader() {
         if (!trackPlayers.get()) {
             clearAllOutlines();
@@ -391,11 +373,11 @@ public class NeighbourhoodWatch extends Module {
             String       name   = player.getName().getString();
             PlayerStatus status = getPlayerStatusPublic(name);
 
-            boolean shouldHighlight = switch (status) {
-                case Friend -> trackFriends.get();
-                case Enemy  -> trackEnemies.get();
-                case Proxy  -> trackProxies.get();
-                case Other  -> trackOthers.get();
+            boolean shouldHighlight = trackFilter.get() == TabFilter.All || switch (status) {
+                case Friend -> trackFilter.get() == TabFilter.Friends;
+                case Enemy  -> trackFilter.get() == TabFilter.Enemies;
+                case Proxy  -> trackFilter.get() == TabFilter.Proxies;
+                case Other  -> trackFilter.get() == TabFilter.Others;
             };
             if (!shouldHighlight) continue;
 
@@ -423,7 +405,7 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Render — optional bloom halo behind the silhouette outline
+    // Render 3D — bloom halo
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
@@ -448,7 +430,7 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Packet Handler
+    // Packet Handler — Tab list
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
@@ -468,11 +450,21 @@ public class NeighbourhoodWatch extends Module {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Chat message listener — Message Control
+    // ═══════════════════════════════════════════════════════════════════════════
+
     @EventHandler
-    private void onReceiveMessage(ReceiveMessageEvent event) {
-        if (!autoIgnore.get() || mc.player == null || mc.player.networkHandler == null) return;
+    private void onReceiveMessage(meteordevelopment.meteorclient.events.game.ReceiveMessageEvent event) {
+        if (mc.player == null || mc.player.networkHandler == null) return;
         if (ignoreKeywords.get().isEmpty()) return;
-        parseChatMessage(event.getMessage().getString());
+
+        if (filterMode.get() == FilterMode.AutoIgnore) {
+            parseMessageForAutoIgnore(event.getMessage().getString());
+        } else {
+            String censored = censorMessage(event.getMessage().getString());
+            if (censored != null) event.setMessage(net.minecraft.text.Text.literal(censored));
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -519,100 +511,26 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Outline Color Injection
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Writes the desired outline color into Meteor's static
-     * {@code RenderUtils.entityOutlineColors} map. The OutlineEntityFeatureRenderer
-     * checks this map before falling back to the entity's scoreboard team color,
-     * giving us full per-player color control with no server-side interaction.
-     *
-     * If the field doesn't exist in the current Meteor build the call is silently
-     * ignored — the outline will appear white (default team color) which is still
-     * functionally correct.
-     */
-    private void setOutlineColor(Entity entity, SettingColor color) {
-        try {
-            var field = meteordevelopment.meteorclient.utils.render.RenderUtils.class
-                .getDeclaredField("entityOutlineColors");
-            field.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            java.util.Map<Integer, Color> map =
-                (java.util.Map<Integer, Color>) field.get(null);
-            if (map != null) {
-                map.put(entity.getId(), new Color(color.r, color.g, color.b, color.a));
-            }
-        } catch (NoSuchFieldException | IllegalAccessException ignored) {
-            // Field not present in this Meteor build — outline uses default team/white color.
-        }
-    }
-
-    private void clearAllOutlines() {
-        if (mc.world != null) {
-            for (int id : activelyOutlined) {
-                Entity e = mc.world.getEntityById(id);
-                if (e != null) e.setGlowing(false);
-            }
-        }
-        activelyOutlined.clear();
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Chat Parsing
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private void parseChatMessage(String rawMessage) {
-        String sender, messageBody;
-
-        if (rawMessage.startsWith("<")) {
-            int close = rawMessage.indexOf('>');
-            if (close < 1) return;
-            sender      = rawMessage.substring(1, close).trim();
-            messageBody = rawMessage.substring(close + 1).trim();
-        } else {
-            int colon = rawMessage.indexOf(':');
-            if (colon < 1 || colon >= 20) return;
-            String possibleName = rawMessage.substring(0, colon);
-            if (possibleName.contains(" ")) return;
-            sender      = possibleName.trim();
-            messageBody = rawMessage.substring(colon + 1).trim();
-        }
-
-        if (sender.equalsIgnoreCase(mc.player.getName().getString())) return;
-        if (isFriend(sender) || isProxy(sender)) return;
-        if (ignoredThisSession.contains(sender.toLowerCase())) return;
-
-        boolean matched = false;
-        for (String keyword : ignoreKeywords.get()) {
-            if (keyword.isBlank()) continue;
-            String body = ignoreCaseSensitive.get() ? messageBody : messageBody.toLowerCase();
-            String kw   = ignoreCaseSensitive.get() ? keyword     : keyword.toLowerCase();
-            if (body.contains(kw)) { matched = true; break; }
-        }
-        if (!matched) return;
-
-        mc.player.networkHandler.sendChatCommand("ignorehard " + sender);
-        ignoredThisSession.add(sender.toLowerCase());
-        if (ignoreNotify.get()) info("Auto-ignored %s (keyword match).", sender);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Tab List
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void handleTabListChange(String playerName, String action) {
         PlayerStatus status = getPlayerStatusPublic(playerName);
 
-        boolean shouldNotify = switch (status) {
-            case Friend -> tabNotifyFriends.get();
-            case Enemy  -> tabNotifyEnemies.get();
-            case Proxy  -> tabNotifyProxies.get();
-            case Other  -> tabNotifyOthers.get();
+        // Check event type filter (Join / Leave / Both)
+        if (tabEvent.get() != TabEvent.Both) {
+            TabEvent eventType = action.equals("joined") ? TabEvent.Join : TabEvent.Leave;
+            if (tabEvent.get() != eventType) return;
+        }
+
+        // Check player category filter
+        boolean shouldNotify = tabFilter.get() == TabFilter.All || switch (status) {
+            case Friend -> tabFilter.get() == TabFilter.Friends;
+            case Enemy  -> tabFilter.get() == TabFilter.Enemies;
+            case Proxy  -> tabFilter.get() == TabFilter.Proxies;
+            case Other  -> tabFilter.get() == TabFilter.Others;
         };
         if (!shouldNotify) return;
-        if (action.equals("joined") && !notifyOnJoin.get()) return;
-        if (action.equals("left")   && !notifyOnLeave.get()) return;
 
         String label = switch (status) {
             case Friend -> "§aFriend";
@@ -624,7 +542,7 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Bloom Rendering (box-space halo behind the silhouette outline)
+    // Bloom Rendering
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
@@ -643,6 +561,95 @@ public class NeighbourhoodWatch extends Module {
                 ShapeMode.Sides, 0
             );
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Chat Parsing — Message Control
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Extracts sender + body from a raw chat string. Returns null if not parseable. */
+    private String[] parseSenderAndBody(String rawMessage) {
+        if (rawMessage.startsWith("<")) {
+            int close = rawMessage.indexOf('>');
+            if (close < 1) return null;
+            return new String[]{ rawMessage.substring(1, close).trim(),
+                                 rawMessage.substring(close + 1).trim() };
+        }
+        int colon = rawMessage.indexOf(':');
+        if (colon < 1 || colon >= 20) return null;
+        String name = rawMessage.substring(0, colon);
+        if (name.contains(" ")) return null;
+        return new String[]{ name.trim(), rawMessage.substring(colon + 1).trim() };
+    }
+
+    /** Returns the first matched keyword in body, or null if none match. */
+    private String findKeyword(String body) {
+        boolean cs = ignoreCaseSensitive.get();
+        String search = cs ? body : body.toLowerCase();
+        for (String kw : ignoreKeywords.get()) {
+            if (kw.isBlank()) continue;
+            if (search.contains(cs ? kw : kw.toLowerCase())) return kw;
+        }
+        return null;
+    }
+
+    /** Censors every matched keyword in rawMessage with Xs. Returns null if nothing matched. */
+    private String censorMessage(String rawMessage) {
+        boolean cs      = ignoreCaseSensitive.get();
+        String  working = rawMessage;
+        boolean changed = false;
+        for (String kw : ignoreKeywords.get()) {
+            if (kw.isBlank()) continue;
+            String replacement = "X".repeat(kw.length());
+            String replaced = cs
+                ? working.replace(kw, replacement)
+                : working.replaceAll("(?i)" + java.util.regex.Pattern.quote(kw), replacement);
+            if (!replaced.equals(working)) { working = replaced; changed = true; }
+        }
+        return changed ? working : null;
+    }
+
+    private void parseMessageForAutoIgnore(String rawMessage) {
+        String[] parts = parseSenderAndBody(rawMessage);
+        if (parts == null) return;
+        String sender = parts[0], messageBody = parts[1];
+
+        if (sender.equalsIgnoreCase(mc.player.getName().getString())) return;
+        if (isFriend(sender) || isProxy(sender)) return;
+        if (ignoredThisSession.contains(sender.toLowerCase())) return;
+        if (findKeyword(messageBody) == null) return;
+
+        mc.player.networkHandler.sendChatCommand("ignorehard " + sender);
+        ignoredThisSession.add(sender.toLowerCase());
+        if (ignoreNotify.get()) info("Auto-ignored %s (keyword match).", sender);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Outline Color Injection
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void setOutlineColor(Entity entity, SettingColor color) {
+        try {
+            var field = meteordevelopment.meteorclient.utils.render.RenderUtils.class
+                .getDeclaredField("entityOutlineColors");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.Map<Integer, Color> map =
+                (java.util.Map<Integer, Color>) field.get(null);
+            if (map != null) {
+                map.put(entity.getId(), new Color(color.r, color.g, color.b, color.a));
+            }
+        } catch (NoSuchFieldException | IllegalAccessException ignored) {}
+    }
+
+    private void clearAllOutlines() {
+        if (mc.world != null) {
+            for (int id : activelyOutlined) {
+                Entity e = mc.world.getEntityById(id);
+                if (e != null) e.setGlowing(false);
+            }
+        }
+        activelyOutlined.clear();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -673,6 +680,30 @@ public class NeighbourhoodWatch extends Module {
 
     private SettingColor withAlpha(SettingColor color, int alpha) {
         return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Category Visibility Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private boolean isFriendCategoryVisible() {
+        return trackFilter.get() == TabFilter.Friends || trackFilter.get() == TabFilter.All
+            || tabFilter.get() == TabFilter.Friends   || tabFilter.get() == TabFilter.All;
+    }
+
+    private boolean isEnemyCategoryVisible() {
+        return trackFilter.get() == TabFilter.Enemies || trackFilter.get() == TabFilter.All
+            || tabFilter.get() == TabFilter.Enemies   || tabFilter.get() == TabFilter.All;
+    }
+
+    private boolean isProxyCategoryVisible() {
+        return trackFilter.get() == TabFilter.Proxies || trackFilter.get() == TabFilter.All
+            || tabFilter.get() == TabFilter.Proxies   || tabFilter.get() == TabFilter.All;
+    }
+
+    private boolean isOtherCategoryVisible() {
+        return trackFilter.get() == TabFilter.Others || trackFilter.get() == TabFilter.All
+            || tabFilter.get() == TabFilter.Others    || tabFilter.get() == TabFilter.All;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

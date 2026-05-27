@@ -159,6 +159,14 @@ public class Timethrottle extends Module {
     private double currentSpeed = 1.0;
     private int    safetyTimer  = 0;
 
+    public double getCurrentSpeed() {
+    return currentSpeed;
+}
+
+public boolean isSafetyActive() {
+    return safetyTimer > 0;
+}
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════

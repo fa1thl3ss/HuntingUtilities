@@ -76,18 +76,6 @@ public class DungeonAssistant extends Module {
         MISROTATED_DEEPSLATE
     }
 
-    /**
-     * Controls how tracked targets are rendered.
-     *
-     * GLOW     – The original layered bloom-box renderer. Draws expanding
-     *            transparent boxes around every target with configurable
-     *            layers, spread, and alpha. Works for both blocks and entities.
-     *
-     * SPECTRAL – Uses Minecraft's built-in outline (spectral/glowing) shader
-     *            via GlowingRegistry + EntityGlowingMixin. Entities receive a
-     *            crisp colored outline; block targets fall back to a subtle
-     *            filled box because the outline shader only applies to entities.
-     */
     public enum RenderMode {
         GLOW,
         SPECTRAL
@@ -105,16 +93,13 @@ public class DungeonAssistant extends Module {
     // State
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final Map<BlockPos, TargetType> targets               = new HashMap<>();
-    private final Map<BlockPos, Integer>    stackedMinecartCounts = new HashMap<>();
-    private final Map<BlockPos, Long>       brokenSpawners        = new HashMap<>();
-    private final Set<ChunkPos>             scannedChunks         = new HashSet<>();
-    private final Set<BlockPos>             checkedContainers     = new HashSet<>();
-    private final List<EndermiteEntity>     endermiteTargets      = new ArrayList<>();
-    private final Set<Integer>              notifiedEndermites    = new HashSet<>();
-    private final Set<Integer>              checkedEntityIds      = new HashSet<>();
-    private final Set<BlockPos>             spawnerTorches        = new HashSet<>();
-    private final Set<BlockPos>             knownStackedMinecarts = new HashSet<>();
+    private final Map<BlockPos, TargetType>  targets               = new HashMap<>();
+    private final Set<ChunkPos>              scannedChunks         = new HashSet<>();
+    private final Set<BlockPos>              checkedContainers     = new HashSet<>();
+    private final List<EndermiteEntity>      endermiteTargets      = new ArrayList<>();
+    private final Set<Integer>               notifiedEndermites    = new HashSet<>();
+    private final Set<Integer>               checkedEntityIds      = new HashSet<>();
+    private final Set<BlockPos>              spawnerTorches        = new HashSet<>();
 
     // Breaking
     private boolean  isBreaking        = false;
@@ -178,13 +163,6 @@ public class DungeonAssistant extends Module {
         .build()
     );
 
-    // ── Highlight rendering ───────────────────────────────────────────────────────────────────────────────────
-
-    /**
-     * GLOW     – Layered bloom boxes (original behaviour).
-     * SPECTRAL – Minecraft's outline/spectral shader for entities; subtle fill
-     *            box fallback for block targets (the shader is entity-only).
-     */
     private final Setting<RenderMode> renderMode = sgGeneral.add(new EnumSetting.Builder<RenderMode>()
         .name("render-mode")
         .description("GLOW = layered bloom boxes. SPECTRAL = outline shader for entities, subtle fill for blocks.")
@@ -282,18 +260,6 @@ public class DungeonAssistant extends Module {
         .visible(trackSpawners::get).build()
     );
 
-    private final Setting<SettingColor> brokenSpawnerColor = sgSpawners.add(new ColorSetting.Builder()
-        .name("broken-spawner-color").description("Color of the broken spawner beam.")
-        .defaultValue(new SettingColor(255, 0, 0, 200))
-        .visible(trackSpawners::get).build()
-    );
-
-    private final Setting<Integer> brokenSpawnerDuration = sgSpawners.add(new IntSetting.Builder()
-        .name("broken-beam-duration").description("How long the beam remains (in seconds).")
-        .defaultValue(10).min(1).sliderMax(60)
-        .visible(trackSpawners::get).build()
-    );
-
     private final Setting<Boolean> autoBreakSpawners = sgSpawners.add(new BoolSetting.Builder()
         .name("auto-break").description("Automatically break spawners in range.").defaultValue(false)
         .build()
@@ -343,24 +309,6 @@ public class DungeonAssistant extends Module {
         .name("chest-minecart-color").description("Chest minecart highlight color.")
         .defaultValue(new SettingColor(255, 180, 0, 255))
         .visible(trackChestMinecarts::get).build()
-    );
-
-    private final Setting<Boolean> highlightStacked = sgChests.add(new BoolSetting.Builder()
-        .name("highlight-stacked-minecarts").description("Use different color for stacked chest minecarts.")
-        .defaultValue(true).visible(trackChestMinecarts::get)
-        .build()
-    );
-
-    private final Setting<Integer> stackedMinecartThreshold = sgChests.add(new IntSetting.Builder()
-        .name("stacked-threshold").description("How many minecarts at the same block position count as 'stacked'.")
-        .defaultValue(2).min(2).max(10).sliderRange(2, 5)
-        .visible(() -> trackChestMinecarts.get() && highlightStacked.get()).build()
-    );
-
-    private final Setting<SettingColor> stackedMinecartColor = sgChests.add(new ColorSetting.Builder()
-        .name("stacked-minecart-color").description("Highlight color for stacked chest minecarts.")
-        .defaultValue(new SettingColor(255, 0, 255, 255))
-        .visible(() -> trackChestMinecarts.get() && highlightStacked.get()).build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -480,15 +428,12 @@ public class DungeonAssistant extends Module {
     @Override
     public void onActivate() {
         targets.clear();
-        stackedMinecartCounts.clear();
-        brokenSpawners.clear();
         scannedChunks.clear();
         checkedContainers.clear();
         endermiteTargets.clear();
         notifiedEndermites.clear();
         checkedEntityIds.clear();
         spawnerTorches.clear();
-        knownStackedMinecarts.clear();
         brokenChestsCount = 0;
         isBreakingChest = false;
         hasPlayedSoundForCurrentScreen = false;
@@ -511,14 +456,11 @@ public class DungeonAssistant extends Module {
         GlowingRegistry.clear();
 
         targets.clear();
-        stackedMinecartCounts.clear();
-        brokenSpawners.clear();
         checkedContainers.clear();
         endermiteTargets.clear();
         notifiedEndermites.clear();
         checkedEntityIds.clear();
         spawnerTorches.clear();
-        knownStackedMinecarts.clear();
 
         resetSoftState();
     }
@@ -586,13 +528,7 @@ public class DungeonAssistant extends Module {
                 if (minecarts.isEmpty()) { toRemove.add(pos); continue; }
 
                 renderBox = getMinecartChestBox(minecarts.get(0));
-                boolean isStacked = highlightStacked.get()
-                    && stackedMinecartCounts.getOrDefault(pos, 0) >= stackedMinecartThreshold.get();
-                color = isStacked ? stackedMinecartColor.get() : chestMinecartColor.get();
-
-                if (!isSpectral) {
-                    if (isStacked) renderBeam(event, renderBox, color);
-                }
+                color = chestMinecartColor.get();
 
             } else {
                 if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
@@ -619,31 +555,7 @@ public class DungeonAssistant extends Module {
         }
 
         for (BlockPos pos : toRemove) {
-            TargetType removedType = targets.get(pos);
-            if (removedType == TargetType.SPAWNER && trackSpawners.get()
-                    && mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)
-                    && mc.world.getBlockState(pos).isAir()) {
-                brokenSpawners.put(pos, System.currentTimeMillis() + (brokenSpawnerDuration.get() * 1000L));
-            }
             targets.remove(pos);
-        }
-
-        if (!brokenSpawners.isEmpty()) {
-            long         now      = System.currentTimeMillis();
-            SettingColor color    = brokenSpawnerColor.get();
-            int          worldBot = mc.world.getBottomY();
-            int          worldTop = worldBot + mc.world.getHeight();
-
-            brokenSpawners.entrySet().removeIf(e -> now > e.getValue());
-
-            for (BlockPos pos : brokenSpawners.keySet()) {
-                Box beamBox = new Box(
-                    pos.getX() + 0.4, worldBot, pos.getZ() + 0.4,
-                    pos.getX() + 0.6, worldTop, pos.getZ() + 0.6
-                );
-                if (!isSpectral) renderGlowLayers(event, beamBox, color);
-                event.renderer.box(beamBox, withAlpha(color, 80), color, ShapeMode.Both, 0);
-            }
         }
 
         if (trackEndermites.get() && !endermiteTargets.isEmpty()) {
@@ -689,14 +601,11 @@ public class DungeonAssistant extends Module {
         if (renderMode.get() != RenderMode.SPECTRAL) return;
 
         if (mc.world != null && mc.player != null && trackChestMinecarts.get()) {
-            int blockRange = range.get() * 16;
-            Box searchBox  = new Box(mc.player.getBlockPos()).expand(blockRange, 64, blockRange);
+            int  blockRange  = range.get() * 16;
+            int  worldHeight = mc.world.getHeight();
+            Box  searchBox   = new Box(mc.player.getBlockPos()).expand(blockRange, worldHeight, blockRange);
             for (ChestMinecartEntity minecart : mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, e -> true)) {
-                BlockPos pos       = minecart.getBlockPos();
-                boolean  isStacked = highlightStacked.get()
-                    && stackedMinecartCounts.getOrDefault(pos, 0) >= stackedMinecartThreshold.get();
-                SettingColor c = isStacked ? stackedMinecartColor.get() : chestMinecartColor.get();
-                GlowingRegistry.add(minecart.getId(), toArgb(c));
+                GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
             }
         }
 
@@ -756,9 +665,6 @@ public class DungeonAssistant extends Module {
                     Block targetBlock = mc.world.getBlockState(blockToBreak).getBlock();
                     if (targetBlock == Blocks.CHEST || targetBlock == Blocks.TRAPPED_CHEST || targetBlock == Blocks.SPAWNER) {
                         isBreaking = true;
-                        // FIX: always explicitly derive isBreakingChest from the actual target block.
-                        // Previously the guard `previousSlot < 0` could leave a stale axe slot from a
-                        // prior chest break active when the next target is a spawner.
                         isBreakingChest = (targetBlock == Blocks.CHEST || targetBlock == Blocks.TRAPPED_CHEST);
                         if (silentMode.get()) previousSlot = mc.player.getInventory().selectedSlot;
                     } else {
@@ -799,7 +705,6 @@ public class DungeonAssistant extends Module {
                     int axeSlot = findAxe();
                     if (axeSlot != -1) mc.player.getInventory().selectedSlot = axeSlot;
                 } else {
-                    // Spawner — use pickaxe, never axe
                     int pickaxeSlot = findPickaxe();
                     if (pickaxeSlot != -1) mc.player.getInventory().selectedSlot = pickaxeSlot;
                 }
@@ -1114,12 +1019,9 @@ public class DungeonAssistant extends Module {
 
     private void resetScanningState() {
         targets.clear();
-        stackedMinecartCounts.clear();
-        brokenSpawners.clear();
         scannedChunks.clear();
         checkedContainers.clear();
         checkedEntityIds.clear();
-        knownStackedMinecarts.clear();
         GlowingRegistry.clear();
     }
 
@@ -1291,62 +1193,27 @@ public class DungeonAssistant extends Module {
     private void scanChestMinecarts() {
         if (!trackChestMinecarts.get()) return;
 
-        boolean isSpectral = renderMode.get() == RenderMode.SPECTRAL;
-        int blockRange = range.get() * 16;
-        Box searchBox  = new Box(mc.player.getBlockPos()).expand(blockRange, 64, blockRange);
+        boolean isSpectral  = renderMode.get() == RenderMode.SPECTRAL;
+        int     blockRange  = range.get() * 16;
+        int     worldHeight = mc.world.getHeight();
+        Box     searchBox   = new Box(mc.player.getBlockPos()).expand(blockRange, worldHeight, blockRange);
 
-        Map<BlockPos, Integer> minecartCountMap = new HashMap<>();
+        Set<BlockPos> currentPositions = new HashSet<>();
         for (ChestMinecartEntity minecart : mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, entity -> true)) {
             BlockPos pos = minecart.getBlockPos();
-            minecartCountMap.put(pos, minecartCountMap.getOrDefault(pos, 0) + 1);
+            currentPositions.add(pos);
             targets.put(pos, TargetType.CHEST_MINECART);
 
             if (isSpectral) {
-                boolean isStacked = highlightStacked.get()
-                    && minecartCountMap.getOrDefault(pos, 0) >= stackedMinecartThreshold.get();
-                SettingColor c = isStacked ? stackedMinecartColor.get() : chestMinecartColor.get();
-                GlowingRegistry.add(minecart.getId(), toArgb(c));
+                GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
             } else {
                 GlowingRegistry.remove(minecart.getId());
             }
         }
 
-        stackedMinecartCounts.clear();
-        stackedMinecartCounts.putAll(minecartCountMap);
-
-        targets.entrySet().removeIf(entry -> {
-            if (entry.getValue() == TargetType.CHEST_MINECART && !minecartCountMap.containsKey(entry.getKey())) {
-                stackedMinecartCounts.remove(entry.getKey());
-                return true;
-            }
-            return false;
-        });
-
-        if (mc.player != null) {
-            int threshold = stackedMinecartThreshold.get();
-            Set<BlockPos> currentStacked = new HashSet<>();
-            for (Map.Entry<BlockPos, Integer> entry : minecartCountMap.entrySet()) {
-                if (entry.getValue() >= threshold) currentStacked.add(entry.getKey());
-            }
-
-            for (BlockPos pos : currentStacked) {
-                if (knownStackedMinecarts.add(pos)) {
-                    int count = minecartCountMap.get(pos);
-                    info("§eStacked minecarts detected! §f%d §eminecarts at one position. §7Total stacked groups: §f%d",
-                        count, currentStacked.size());
-                    mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f);
-                }
-            }
-
-            int removed = 0;
-            Iterator<BlockPos> it = knownStackedMinecarts.iterator();
-            while (it.hasNext()) { if (!currentStacked.contains(it.next())) { it.remove(); removed++; } }
-            if (removed > 0) {
-                int remaining = knownStackedMinecarts.size();
-                if (remaining > 0) info("§7%d stacked minecart group(s) cleared. §f%d §7group(s) remaining.", removed, remaining);
-                else               info("§7All stacked minecart groups cleared.");
-            }
-        }
+        targets.entrySet().removeIf(entry ->
+            entry.getValue() == TargetType.CHEST_MINECART && !currentPositions.contains(entry.getKey())
+        );
     }
 
     private void pruneCheckedEntityIds() {
@@ -1373,7 +1240,6 @@ public class DungeonAssistant extends Module {
             double   dz  = pos.getZ() - playerPos.getZ();
 
             if (dx * dx + dz * dz > cleanupRangeSq) {
-                if (entry.getValue() == TargetType.CHEST_MINECART) stackedMinecartCounts.remove(pos);
                 scannedChunks.remove(new ChunkPos(pos.getX() >> 4, pos.getZ() >> 4));
                 return true;
             }
@@ -1397,22 +1263,6 @@ public class DungeonAssistant extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
     // Render Helpers
     // ═══════════════════════════════════════════════════════════════════════════
-
-    private void renderBeam(Render3DEvent event, Box anchorBox, SettingColor color) {
-        if (mc.world == null) return;
-        double half    = 0.125;
-        double centerX = (anchorBox.minX + anchorBox.maxX) / 2.0;
-        double centerZ = (anchorBox.minZ + anchorBox.maxZ) / 2.0;
-        int    worldBot = mc.world.getBottomY();
-        int    worldTop = worldBot + mc.world.getHeight();
-
-        Box beamBox = new Box(
-            centerX - half, worldBot, centerZ - half,
-            centerX + half, worldTop, centerZ + half
-        );
-        renderGlowLayers(event, beamBox, color);
-        event.renderer.box(beamBox, withAlpha(color, 60), color, ShapeMode.Both, 0);
-    }
 
     private Box getMinecartChestBox(ChestMinecartEntity minecart) {
         Box    entityBox = minecart.getBoundingBox();

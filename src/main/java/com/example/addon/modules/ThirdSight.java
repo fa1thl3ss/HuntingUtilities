@@ -19,17 +19,14 @@ import net.minecraft.client.option.Perspective;
 public class ThirdSight extends Module {
 
     /**
-     * Selects the active camera feature. Shoulder can also be triggered by its
-     * keybind regardless of which feature is currently selected here.
+     * Selects the active camera feature.
      * Zoom is always keybind-driven and is independent of this setting.
      */
-    public enum CameraFeature { ThirdPerson, BirdsEye, Shoulder }
-    public enum ShoulderSide  { Right, Left }
+    public enum CameraFeature { ThirdPerson, BirdsEye }
 
-    private final SettingGroup sgGeneral  = settings.getDefaultGroup();
-    private final SettingGroup sgShoulder = settings.createGroup("Shoulder");
-    private final SettingGroup sgZoom     = settings.createGroup("Zoom");
-    private final SettingGroup sgATW      = settings.createGroup("Around the World");
+    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final SettingGroup sgZoom    = settings.createGroup("Zoom");
+    private final SettingGroup sgATW     = settings.createGroup("Around the World");
 
     // ── General ──────────────────────────────────────────────────────────────
 
@@ -42,7 +39,7 @@ public class ThirdSight extends Module {
 
     public final Setting<CameraFeature> cameraFeature = sgGeneral.add(new EnumSetting.Builder<CameraFeature>()
         .name("camera-feature")
-        .description("Active camera feature. Shoulder can also be triggered by its keybind even when not selected here. Zoom is always keybind-driven.")
+        .description("Active camera feature. Zoom is always keybind-driven.")
         .defaultValue(CameraFeature.ThirdPerson)
         .build()
     );
@@ -61,8 +58,7 @@ public class ThirdSight extends Module {
         .name("free-look")
         .description("Orbit the camera around the player without affecting movement direction. Disabled in BirdsEye mode.")
         .defaultValue(true)
-        .visible(() -> cameraFeature.get() == CameraFeature.ThirdPerson
-                    || cameraFeature.get() == CameraFeature.Shoulder)
+        .visible(() -> cameraFeature.get() == CameraFeature.ThirdPerson)
         .build()
     );
 
@@ -73,8 +69,7 @@ public class ThirdSight extends Module {
         .min(1.0)
         .max(20.0)
         .sliderRange(1.0, 20.0)
-        .visible(() -> (cameraFeature.get() == CameraFeature.ThirdPerson
-                     || cameraFeature.get() == CameraFeature.Shoulder) && freeLook.get())
+        .visible(() -> cameraFeature.get() == CameraFeature.ThirdPerson && freeLook.get())
         .build()
     );
 
@@ -85,52 +80,7 @@ public class ThirdSight extends Module {
         .min(0.01)
         .max(1.0)
         .sliderRange(0.02, 0.5)
-        .visible(() -> !freeLook.get()
-               && (cameraFeature.get() == CameraFeature.ThirdPerson
-                || cameraFeature.get() == CameraFeature.Shoulder))
-        .build()
-    );
-
-
-    public final Setting<ShoulderSide> shoulderSide = sgShoulder.add(new EnumSetting.Builder<ShoulderSide>()
-        .name("side")
-        .description("Which shoulder the camera sits behind.")
-        .defaultValue(ShoulderSide.Right)
-        .build()
-    );
-
-    public final Setting<Double> shoulderOffset = sgShoulder.add(new DoubleSetting.Builder()
-        .name("offset")
-        .description("How far left or right the camera is shifted, in blocks.")
-        .defaultValue(0.75)
-        .min(0.1)
-        .max(3.0)
-        .sliderRange(0.1, 2.0)
-        .build()
-    );
-
-    public final Setting<Keybind> shoulderToggleKey = sgShoulder.add(new KeybindSetting.Builder()
-        .name("toggle-key")
-        .description("Press to flip between left and right shoulder. Also activates shoulder mode if another feature is selected.")
-        .defaultValue(Keybind.none())
-        .build()
-    );
-
-    public final Setting<Boolean> smoothTransitions = sgShoulder.add(new BoolSetting.Builder()
-        .name("smooth-transitions")
-        .description("Smoothly interpolate between camera positions.")
-        .defaultValue(true)
-        .build()
-    );
-
-    public final Setting<Double> transitionSpeed = sgShoulder.add(new DoubleSetting.Builder()
-        .name("transition-speed")
-        .description("Speed of the smoothing.")
-        .defaultValue(0.15)
-        .min(0.01)
-        .max(1.0)
-        .sliderRange(0.05, 0.5)
-        .visible(smoothTransitions::get)
+        .visible(() -> !freeLook.get() && cameraFeature.get() == CameraFeature.ThirdPerson)
         .build()
     );
 
@@ -158,7 +108,7 @@ public class ThirdSight extends Module {
 
     public final Setting<Keybind> zoomKey = sgZoom.add(new KeybindSetting.Builder()
         .name("zoom-key")
-        .description("Key to activate zoom. Also activates zoom mode if another feature is selected.")
+        .description("Key to activate zoom.")
         .defaultValue(Keybind.none())
         .build()
     );
@@ -220,10 +170,6 @@ public class ThirdSight extends Module {
     public float cameraYaw   = 0f;
     public float cameraPitch = 0f;
 
-    // Lateral offset read by ThirdSightCameraMixin
-    public float  lateralOffset       = 0f;
-    private float targetLateralOffset = 0f;
-
     private double  currentDistance         = 4.0;
     private boolean isZooming               = false;
     private boolean wasZoomKeyPressed       = false;
@@ -232,25 +178,19 @@ public class ThirdSight extends Module {
     private double  originalFov             = -1;
     private double  currentFov              = 0;
 
-    // True when the shoulder keybind is overriding the selected CameraFeature
-    private boolean shoulderKeyActive    = false;
-    private boolean wasShoulderKeyPressed = false;
-
     private Perspective previousPerspective = null;
-    private boolean     wasKeyPressed       = false;
 
     // ── Around the World state ────────────────────────────────────────────────
 
     private boolean atwActive        = false;
     private boolean wasAtwKeyPressed = false;
-    // Accumulated yaw that wraps continuously — written into cameraYaw each render frame
     private float   atwCurrentYaw    = 0f;
 
     // ── Constructor ───────────────────────────────────────────────────────────
 
     public ThirdSight() {
         super(HuntingUtilities.CATEGORY, "third-sight",
-            "Third-person camera with configurable distance, no block clipping, free look, BirdsEye mode, shoulder offset, and Around the World spin.");
+            "Third-person camera with configurable distance, no block clipping, free look, BirdsEye mode, and Around the World spin.");
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -266,14 +206,9 @@ public class ThirdSight extends Module {
         if (previousPerspective == Perspective.FIRST_PERSON)
             mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
 
-        updateLateralOffset();
-        if (smoothTransitions.get()) lateralOffset = 0f;
-
         currentDistance = distance.get();
-        isZooming       = false;
+        isZooming               = false;
         wasZoomKeyPressed       = false;
-        wasShoulderKeyPressed   = false;
-        shoulderKeyActive       = false;
         noDistanceActive        = false;
         wasNoDistanceKeyPressed = false;
         originalFov = -1;
@@ -293,7 +228,6 @@ public class ThirdSight extends Module {
         }
 
         previousPerspective = null;
-        lateralOffset = 0f;
         originalFov = -1;
 
         atwActive = false;
@@ -314,28 +248,7 @@ public class ThirdSight extends Module {
             }
             wasNoDistanceKeyPressed = noDistPressed;
 
-            // ── Shoulder keybind ─────────────────────────────────────────────
-            // The toggle-key flips shoulder side when shoulder is the active feature,
-            // OR activates shoulder override mode when another feature is selected.
-            boolean shoulderKeyPressed = shoulderToggleKey.get().isPressed();
-            if (shoulderKeyPressed && !wasShoulderKeyPressed) {
-                if (isShoulderActive()) {
-                    // Already in shoulder mode — just flip the side
-                    shoulderSide.set(shoulderSide.get() == ShoulderSide.Right
-                        ? ShoulderSide.Left : ShoulderSide.Right);
-                } else {
-                    // Keybind override: activate shoulder regardless of selected feature
-                    shoulderKeyActive = !shoulderKeyActive;
-                    if (shoulderKeyActive) info("Shoulder override §aon§r.");
-                    else                   info("Shoulder override §coff§r.");
-                }
-            }
-            // Also handle legacy wasKeyPressed used for the side-flip guard
-            wasKeyPressed        = shoulderKeyPressed;
-            wasShoulderKeyPressed = shoulderKeyPressed;
-
             // ── Zoom keybind ─────────────────────────────────────────────────
-            // Zoom is always keybind-driven and works in any feature mode except BirdsEye.
             boolean zoomPressed = zoomKey.get().isPressed();
             if (cameraFeature.get() != CameraFeature.BirdsEye) {
                 if (zoomToggle.get()) {
@@ -353,7 +266,7 @@ public class ThirdSight extends Module {
             if (atwPressed && !wasAtwKeyPressed) {
                 atwActive = !atwActive;
                 if (atwActive) {
-                    atwCurrentYaw = cameraYaw; // start spin from current camera angle
+                    atwCurrentYaw = cameraYaw;
                     info("Around the World §aon§r.");
                 } else {
                     info("Around the World §coff§r.");
@@ -363,14 +276,10 @@ public class ThirdSight extends Module {
 
         } else {
             wasNoDistanceKeyPressed = false;
-            wasKeyPressed           = false;
-            wasShoulderKeyPressed   = false;
             wasZoomKeyPressed       = false;
             wasAtwKeyPressed        = false;
             if (!zoomToggle.get()) isZooming = false;
         }
-
-
 
         // ── Normal camera tick ────────────────────────────────────────────────
         if (noDistanceActive) {
@@ -378,37 +287,23 @@ public class ThirdSight extends Module {
                 mc.options.setPerspective(previousPerspective);
                 previousPerspective = null;
             }
-            if (isZooming) {
-                if (mc.options.getPerspective().isFirstPerson()) {
-                    targetLateralOffset = 0f;
-                } else {
-                    updateLateralOffset();
-                }
-            } else {
-                targetLateralOffset = 0f;
-            }
         } else {
             if (previousPerspective == null)
                 previousPerspective = mc.options.getPerspective();
             if (mc.options.getPerspective() != Perspective.THIRD_PERSON_BACK)
                 mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
 
-            if (cameraFeature.get() == CameraFeature.BirdsEye && !shoulderKeyActive) {
+            if (cameraFeature.get() == CameraFeature.BirdsEye) {
                 cameraYaw   = mc.player.getYaw();
                 cameraPitch = 90f;
             }
-            updateLateralOffset();
         }
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        // During Around the World, inject the continuously advancing yaw and
-        // optionally lock pitch; distance and lateral offset use normal lerp.
         float speed;
         if (atwActive) {
-            // Advance yaw every render frame scaled by tickDelta so speed is
-            // frame-rate independent and the rotation is perfectly smooth.
             float delta = (float)(atwSpeed.get() * event.tickDelta);
             if (!atwClockwise.get()) delta = -delta;
             atwCurrentYaw += delta;
@@ -418,49 +313,35 @@ public class ThirdSight extends Module {
             cameraYaw   = atwCurrentYaw;
             cameraPitch = atwLockPitch.get()
                 ? (float) atwPitch.get().doubleValue()
-                : cameraPitch; // leave pitch wherever free-look left it
+                : cameraPitch;
 
-            speed = smoothTransitions.get() ? transitionSpeed.get().floatValue() : 1.0f;
+            speed = 1.0f;
             double targetDist = isZooming ? zoomDistance.get() : distance.get();
             currentDistance += (targetDist - currentDistance) * speed;
             if (Math.abs(targetDist - currentDistance) < 0.01) currentDistance = targetDist;
 
-            lateralOffset += (targetLateralOffset - lateralOffset) * speed;
-            if (Math.abs(targetLateralOffset - lateralOffset) < 0.001f)
-                lateralOffset = targetLateralOffset;
-
         } else {
             double targetDist = isZooming ? zoomDistance.get() : distance.get();
-            speed = smoothTransitions.get() ? transitionSpeed.get().floatValue() : 1.0f;
+            speed = 1.0f;
 
-            // When free-look is off, smoothly chase the player's look direction
-            // so the camera glides back behind wherever the player is facing
-            // rather than snapping or sitting frozen at a stale angle.
-            boolean shouldFollow = !atwActive
-                && !freeLook.get()
+            // When free-look is off, smoothly chase the player's look direction.
+            boolean shouldFollow = !freeLook.get()
                 && mc.player != null
-                && (cameraFeature.get() == CameraFeature.ThirdPerson
-                 || cameraFeature.get() == CameraFeature.Shoulder
-                 || shoulderKeyActive);
+                && cameraFeature.get() == CameraFeature.ThirdPerson;
             if (shouldFollow) {
                 float playerYaw = mc.player.getYaw();
                 float yawDiff = playerYaw - cameraYaw;
-                // Shortest-arc wrap so we always take the <180° path
                 if (yawDiff >  180f) yawDiff -= 360f;
                 if (yawDiff < -180f) yawDiff += 360f;
                 float fs = (float) followSpeed.get().doubleValue();
                 cameraYaw += yawDiff * fs;
             }
 
-            lateralOffset += (targetLateralOffset - lateralOffset) * speed;
-            if (Math.abs(targetLateralOffset - lateralOffset) < 0.001f)
-                lateralOffset = targetLateralOffset;
-
             currentDistance += (targetDist - currentDistance) * speed;
             if (Math.abs(targetDist - currentDistance) < 0.01) currentDistance = targetDist;
         }
 
-        // FOV smoothing (first-person zoom) — only when not spinning
+        // FOV smoothing (first-person zoom)
         if (!atwActive) {
             if (noDistanceActive && mc.options.getPerspective().isFirstPerson()) {
                 if (isZooming) {
@@ -491,25 +372,6 @@ public class ThirdSight extends Module {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private void updateLateralOffset() {
-        if (!isShoulderActive()) {
-            targetLateralOffset = 0f;
-        } else {
-            float offset = (float) shoulderOffset.get().doubleValue();
-            targetLateralOffset = shoulderSide.get() == ShoulderSide.Right ? offset : -offset;
-        }
-        if (!smoothTransitions.get()) lateralOffset = targetLateralOffset;
-    }
-
-    /**
-     * Returns true when shoulder mode is effectively active — either because
-     * Shoulder is the selected CameraFeature, or the shoulder keybind override
-     * is engaged.
-     */
-    public boolean isShoulderActive() {
-        return cameraFeature.get() == CameraFeature.Shoulder || shoulderKeyActive;
-    }
-
     public double getDistance() { return currentDistance; }
 
     public boolean isZooming() { return isZooming; }
@@ -521,15 +383,13 @@ public class ThirdSight extends Module {
     public boolean isAtwActive() { return atwActive; }
 
     /**
-     * Called by ThirdSightMouseMixin — free look is active in ThirdPerson and
-     * Shoulder modes (or shoulder keybind override), but never in BirdsEye.
+     * Called by ThirdSightMouseMixin — free look is active in ThirdPerson mode only,
+     * never in BirdsEye.
      */
     public boolean isFreeLookActive() {
         if (!isActive()) return false;
         if (mc.options.getPerspective().isFirstPerson()) return false;
         if (noDistanceActive && !isZooming()) return false;
-        CameraFeature f = cameraFeature.get();
-        return (f == CameraFeature.ThirdPerson || f == CameraFeature.Shoulder || shoulderKeyActive)
-            && freeLook.get();
+        return cameraFeature.get() == CameraFeature.ThirdPerson && freeLook.get();
     }
 }

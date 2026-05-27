@@ -10,10 +10,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.addon.HuntingUtilities;
-import com.example.addon.utils.XaeroPortalBridge;
-import com.example.addon.utils.XaerosPlusPortalDB;
-import com.example.addon.utils.XaerosWaypointHelper;
-import com.example.addon.utils.XaerosWaypointHelper.WaypointEntry;
 
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.BlockUpdateEvent;
@@ -24,14 +20,9 @@ import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
-import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.utils.misc.Keybind;
-import meteordevelopment.meteorclient.utils.player.FindItemResult;
-import meteordevelopment.meteorclient.utils.player.InvUtils;
-import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
@@ -39,15 +30,10 @@ import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.EndGatewayBlockEntity;
 import net.minecraft.block.entity.EndPortalBlockEntity;
-import net.minecraft.item.Items;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
@@ -62,25 +48,6 @@ public class PortalTracker extends Module {
     private static final int    STRUCTURE_REBUILD_INTERVAL_TICKS = 5;
     private static final int    CLEANUP_INTERVAL_TICKS           = 60;
     private static final long   MESSAGE_COOLDOWN_MS              = 2000;
-    private static final int    WAYPOINT_DEDUP_RADIUS            = 8;
-
-    /**
-     * Classification strategy: TWO-SCAN CORNER CHECK.
-     *
-     * Scan 1 — Portal air blocks: flood-fill connected NETHER_PORTAL blocks to
-     *           find the component and its axis-aligned bounding box.
-     *
-     * Scan 2 — Corner obsidian: test the 4 corner positions of the portal's
-     *           bounding rectangle (in the plane of the portal). If obsidian is
-     *           present at ALL 4 corners → EXIT (full-size) portal.
-     *           If any corner is missing obsidian → CUSTOM (built) portal.
-     *
-     * Corner positions are derived from the component bounding box, not from an
-     * arbitrary obsidian count, so the result is geometry-stable: adding or
-     * removing interior obsidian blocks cannot change the classification, and
-     * there is no overlap window between "full-size" and "custom" colour because
-     * the result is a single boolean derived from a clean geometric predicate.
-     */
 
     // ── Highlight Style ────────────────────────────────────────────
     public enum HighlightStyle {
@@ -112,7 +79,6 @@ public class PortalTracker extends Module {
     private final SettingGroup sgGlow          = settings.createGroup("Glow");
     private final SettingGroup sgSpectral      = settings.createGroup("Spectral");
     private final SettingGroup sgBeam          = settings.createGroup("Beam");
-    private final SettingGroup sgPlatform      = settings.createGroup("Platform 9\u00BE");
 
     // ── General ────────────────────────────────────────────────────
     private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
@@ -123,17 +89,9 @@ public class PortalTracker extends Module {
         .name("auto-mark-range").description("Auto-mark Nether portals within this many blocks of the player as created by you.")
         .defaultValue(10).min(0).max(50).sliderMin(0).sliderMax(50).build());
 
-    private final Setting<Boolean> trackOverworld = sgGeneral.add(new BoolSetting.Builder()
-        .name("track-overworld").description("Also auto-mark portals found in the Overworld as created by you.")
-        .defaultValue(false).build());
-
     private final Setting<Boolean> showCreatedCount = sgGeneral.add(new BoolSetting.Builder()
         .name("show-created-count").description("Show a chat message each time a new portal you created is discovered.")
         .defaultValue(true).build());
-
-    private final Setting<Boolean> onlyShowCreated = sgGeneral.add(new BoolSetting.Builder()
-        .name("only-show-created").description("Only highlight portals you've created.")
-        .defaultValue(false).build());
 
     private final Setting<Boolean> dynamicColors = sgGeneral.add(new BoolSetting.Builder()
         .name("dynamic-colors").description("Animate portal colors. Each type uses a distinct hue offset so types stay visually distinguishable.")
@@ -142,14 +100,6 @@ public class PortalTracker extends Module {
     private final Setting<Boolean> highlightFrame = sgGeneral.add(new BoolSetting.Builder()
         .name("highlight-frame").description("Highlights the obsidian frame of Nether portals.")
         .defaultValue(true).build());
-
-    private final Setting<Boolean> xaeroIntegration = sgGeneral.add(new BoolSetting.Builder()
-        .name("xaero-integration").description("Enables all Xaero integration.")
-        .defaultValue(true).build());
-
-    private final Setting<Boolean> resetButton = sgGeneral.add(new BoolSetting.Builder()
-        .name("reset").description("Reset the current session and clear all created-portal records.")
-        .defaultValue(false).onChanged(this::handleReset).build());
 
     // ── Nether Portals ─────────────────────────────────────────────
     private final Setting<Boolean> scanNetherPortals = sgNetherPortals.add(new BoolSetting.Builder()
@@ -308,15 +258,6 @@ public class PortalTracker extends Module {
         .defaultValue(0.18).min(0.02).max(1.0).sliderMax(0.5)
         .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN && guardianGlow.get()).build());
 
-    // ── Platform 9¾ ───────────────────────────────────────────────
-    private final Setting<Keybind> platformKey = sgPlatform.add(new KeybindSetting.Builder()
-        .name("platform-key").description("Key to build the 5x5 platform.")
-        .defaultValue(Keybind.none()).action(this::startPlatformBuild).build());
-
-    private final Setting<Integer> platformDelay = sgPlatform.add(new IntSetting.Builder()
-        .name("platform-delay").description("Ticks between block placements.")
-        .defaultValue(2).min(1).build());
-
     // ── State ──────────────────────────────────────────────────────
     private final Map<BlockPos, PortalType>      portals            = new ConcurrentHashMap<>();
     private final Set<BlockPos>                  createdPortals     = ConcurrentHashMap.newKeySet();
@@ -339,52 +280,9 @@ public class PortalTracker extends Module {
     private int      structureTimer          = 0;
     private int      cleanupTimer            = 0;
 
-    private final List<BlockPos> platformPositions = new ArrayList<>();
-    private int platformIndex = 0;
-    private int platformTimer = 0;
-
-    private final Map<BlockPos, WaypointEntry> xaeroTrackedPortals = new ConcurrentHashMap<>();
-    private int xaerosPlusWatchCount = 0;
-
-    /**
-     * Caches the corner-based isFullSize result for each portal anchor.
-     *
-     * Key:   component anchor BlockPos (lowest Y→X→Z corner of the component).
-     * Value: true  = exit portal   (obsidian at ALL 4 frame corners)
-     *        false = custom portal (at least one corner missing obsidian)
-     *
-     * An entry is only written once both of these are true:
-     *   1. Every chunk that contains a block of this component is in scannedChunks.
-     *   2. dimensionChangeCooldown has reached 0 (world data fully settled).
-     *
-     * Until then the portal renders with the conservative default (full-size /
-     * exit colour) so the player never sees an unexpected colour flash.
-     *
-     * Evicted by retainAll(activeAnchors) inside groupPortals() so stale entries
-     * from demolished portals or drifted anchors are removed each rebuild pass.
-     *
-     * Also cleared on dimension change (unlike crossDimensionSizeCache).
-     */
     private final Map<BlockPos, Boolean> sizeConfirmedPortals = new ConcurrentHashMap<>();
-
-    /**
-     * Anchors that have not yet been classified because their chunks were not
-     * fully loaded or the world was still settling. groupPortals() sets
-     * portalsDirty = true whenever this set is non-empty so the next pass
-     * will retry classification.
-     */
-    private final Set<BlockPos> pendingSizeRecheck = ConcurrentHashMap.newKeySet();
-
-    /**
-     * Persistent corner-classification cache that survives dimension changes.
-     * Key:   "dimension:x,y,z" of the anchor block.
-     * Value: true = exit portal, false = custom portal.
-     *
-     * Prevents the overworld entry portal flickering from exit→custom on every
-     * Nether return, because sizeConfirmedPortals is wiped on dimension change
-     * but this map is not. Only cleared on full session reset.
-     */
-    private final Map<String, Boolean> crossDimensionSizeCache = new ConcurrentHashMap<>();
+    private final Set<BlockPos>          pendingSizeRecheck   = ConcurrentHashMap.newKeySet();
+    private final Map<String, Boolean>   crossDimensionSizeCache = new ConcurrentHashMap<>();
 
     public PortalTracker() {
         super(HuntingUtilities.CATEGORY, "portal-tracker", "Automatically tracks and highlights portals.");
@@ -397,7 +295,6 @@ public class PortalTracker extends Module {
         sessionStartTime = System.currentTimeMillis();
         if (mc.player != null && mc.world != null && mc.world.getRegistryKey() != null) {
             lastDimension = mc.world.getRegistryKey().getValue().toString();
-            loadXaeroWaypointsForDimension(lastDimension);
         }
     }
 
@@ -416,11 +313,9 @@ public class PortalTracker extends Module {
         portals.clear(); createdPortals.clear(); portalStructureMap.clear();
         notifiedStructures.clear(); messageCooldowns.clear();
         scannedChunks.clear(); dirtyChunks.clear();
-        xaeroTrackedPortals.clear(); XaeroPortalBridge.clearWatched();
         sizeConfirmedPortals.clear(); pendingSizeRecheck.clear(); crossDimensionSizeCache.clear();
         portalsDirty = false; manuallyActivated = false; sessionStartTime = 0;
         structureTimer = 0; cleanupTimer = 0;
-        platformPositions.clear(); platformIndex = 0; platformTimer = 0;
     }
 
     // ── Tick ───────────────────────────────────────────────────────
@@ -442,8 +337,6 @@ public class PortalTracker extends Module {
         scanBlockEntities(centerChunkX, centerChunkZ);
         scanNewChunks(centerChunkX, centerChunkZ);
 
-        if (xaeroIntegration.get()) XaeroPortalBridge.tick();
-
         if (portalsDirty && ++structureTimer >= STRUCTURE_REBUILD_INTERVAL_TICKS) {
             structureTimer = 0; portalsDirty = false; groupPortals();
         }
@@ -454,7 +347,6 @@ public class PortalTracker extends Module {
         }
 
         if (!manuallyActivated) manuallyActivated = true;
-        handlePlatformBuilding();
     }
 
     private boolean handleDimensionChange() {
@@ -469,14 +361,8 @@ public class PortalTracker extends Module {
 
             portals.clear(); createdPortals.clear(); portalStructureMap.clear();
             notifiedStructures.clear(); scannedChunks.clear(); dirtyChunks.clear();
-            xaeroTrackedPortals.clear(); XaeroPortalBridge.clearWatched();
-            // Per-session classification cache cleared on each dimension change.
-            // crossDimensionSizeCache is intentionally NOT cleared here — it lets
-            // previously-confirmed portals skip the corner scan on re-entry.
             sizeConfirmedPortals.clear(); pendingSizeRecheck.clear();
             portalsDirty = false;
-
-            loadXaeroWaypointsForDimension(currDim);
 
             boolean notify =
                 (currDim.equals("minecraft:the_nether") && scanNetherPortals.get()) ||
@@ -485,60 +371,6 @@ public class PortalTracker extends Module {
             if (notify) sendMessage("§7Entered " + getDimensionName(currDim) + " — scanning started");
             return true;
         } catch (Exception ignored) { return true; }
-    }
-
-    // ── Xaero Integration ──────────────────────────────────────────
-    private void loadXaeroWaypointsForDimension(String dimensionId) {
-        if (!xaeroIntegration.get()) return;
-        List<WaypointEntry> entries = XaerosWaypointHelper.loadPortalWaypoints(dimensionId);
-        for (WaypointEntry entry : entries) {
-            if (entry.name.contains(XaerosWaypointHelper.REMOVED_TAG)) continue;
-            BlockPos pos = entry.toBlockPos();
-            xaeroTrackedPortals.put(pos, entry);
-            XaeroPortalBridge.watchPosition(pos, (watchedPos, stillExists) -> {
-                if (!isActive()) return;
-                if (stillExists) { xaeroTrackedPortals.remove(watchedPos); }
-                else {
-                    if (!portals.containsKey(watchedPos)) {
-                        WaypointEntry e = xaeroTrackedPortals.remove(watchedPos);
-                        if (e != null) confirmPortalRemoved(watchedPos, e, dimensionId);
-                    }
-                }
-            });
-        }
-        if (!xaeroTrackedPortals.isEmpty())
-            sendMessage("§7Xaero: watching §f" + xaeroTrackedPortals.size()
-                + " §7saved portal" + (xaeroTrackedPortals.size() == 1 ? "" : "s")
-                + " for removal" + (XaeroPortalBridge.XAERO_PRESENT ? "" : " §8(Xaero not detected)"));
-        loadXaerosPlusPortals(dimensionId);
-    }
-
-    private void loadXaerosPlusPortals(String dimensionId) {
-        if (!xaeroIntegration.get()) return;
-        if (!XaerosPlusPortalDB.isAvailable()) return;
-        if (!dimensionId.equals("minecraft:the_nether") && !dimensionId.equals("minecraft:overworld")) return;
-        List<XaerosPlusPortalDB.PortalEntry> entries = XaerosPlusPortalDB.loadForDimension(dimensionId, 50000);
-        xaerosPlusWatchCount = 0;
-        for (XaerosPlusPortalDB.PortalEntry entry : entries) {
-            XaeroPortalBridge.watchColumn(entry.x, entry.z, (foundPos, present) -> {
-                if (!isActive()) return;
-                if (present) { if (!portals.containsKey(foundPos)) { portals.put(foundPos, PortalType.NETHER); portalsDirty = true; } }
-                else sendMessage("§c\u26A0 XaeroPlus portal removed §8[" + getDimensionName(dimensionId) + "]");
-            });
-            xaerosPlusWatchCount++;
-        }
-        if (xaerosPlusWatchCount > 0)
-            sendMessage("§7XaeroPlus: watching §f" + xaerosPlusWatchCount
-                + " §7portal" + (xaerosPlusWatchCount == 1 ? "" : "s")
-                + " from database §8[" + getDimensionName(dimensionId) + "]");
-    }
-
-    private void confirmPortalRemoved(BlockPos pos, WaypointEntry entry, String dimensionId) {
-        String newName = entry.name.replace(XaerosWaypointHelper.PORTAL_TAG, XaerosWaypointHelper.REMOVED_TAG);
-        if (newName.equals(entry.name)) newName = XaerosWaypointHelper.REMOVED_TAG + " " + entry.name;
-        boolean updated = XaerosWaypointHelper.replaceWaypoint(dimensionId, entry, newName, XaerosWaypointHelper.COLOR_GRAY);
-        if (updated) sendMessage("§c\u26A0 Portal removed §7— waypoint updated §8[" + getDimensionName(dimensionId) + "]");
-        else          sendMessage("§c\u26A0 Portal removed §8[" + getDimensionName(dimensionId) + "]");
     }
 
     // ── Scanning ───────────────────────────────────────────────────
@@ -638,62 +470,17 @@ public class PortalTracker extends Module {
     private void processNewDiscovery(BlockPos pos, PortalType type, String dimensionId) {
         if (autoMarkRange.get() <= 0 || mc.player == null) return;
         if (type != PortalType.NETHER) return;
-        if (dimensionId.equals("minecraft:overworld") && !trackOverworld.get()) return;
         if (pos.getSquaredDistance(mc.player.getPos()) > (double) autoMarkRange.get() * autoMarkRange.get()) return;
         if (exclusionTimer > 0 && entryPortalPos != null
                 && pos.getSquaredDistance(entryPortalPos) <= ENTRY_EXCLUSION_RADIUS_SQ) return;
         boolean added = createdPortals.add(pos);
-        if (added) { portalsDirty = true; if (xaeroIntegration.get()) tryWriteXaeroWaypoint(pos, type, dimensionId); }
-    }
-
-    private void tryWriteXaeroWaypoint(BlockPos pos, PortalType type, String dimensionId) {
-        String name = XaerosWaypointHelper.PORTAL_TAG + " " + type.getDisplayName()
-            + " (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ")";
-        int color = switch (type) {
-            case NETHER      -> XaerosWaypointHelper.COLOR_PURPLE;
-            case END_PORTAL  -> XaerosWaypointHelper.COLOR_LIME;
-            case END_GATEWAY -> XaerosWaypointHelper.COLOR_CYAN;
-        };
-        boolean written = XaerosWaypointHelper.addWaypoint(pos, name, dimensionId, color, WAYPOINT_DEDUP_RADIUS);
-        if (written) {
-            WaypointEntry synth = new WaypointEntry(
-                "waypoint:" + name + ":PT:" + pos.getX() + ":" + pos.getY() + ":" + pos.getZ()
-                    + ":" + color + ":false:0:gui.xaero_default:0.0:false",
-                name, pos.getX(), pos.getY(), pos.getZ(), color);
-            xaeroTrackedPortals.put(pos, synth);
-        }
+        if (added) portalsDirty = true;
     }
 
     // ── Grouping ───────────────────────────────────────────────────
-
-    /**
-     * TWO-SCAN CORNER CHECK — the sole size-classification method.
-     *
-     * Scan 1 (already done by caller): the flood-fill that produced {@code component}
-     * gives us the set of NETHER_PORTAL air blocks and their bounding box.
-     *
-     * Scan 2 (this method): derive the portal plane and check the 4 corners of
-     * the bounding rectangle for obsidian.
-     *
-     * Portal orientation:
-     *   - X-axis portal (portal blocks share the same X, vary in Y and Z):
-     *       corners are at (minX, minY-1, minZ-1), (minX, minY-1, maxZ+1),
-     *                      (minX, maxY+1, minZ-1), (minX, maxY+1, maxZ+1)
-     *   - Z-axis portal (portal blocks vary in X, share the same Z):
-     *       corners are at (minX-1, minY-1, minZ), (maxX+1, minY-1, minZ),
-     *                      (minX-1, maxY+1, minZ), (maxX+1, maxY+1, minZ)
-     *
-     * We test for obsidian at all 4 derived corner positions.
-     * ALL 4 present → exit portal (isFullSize = true).
-     * Any corner missing → custom portal (isFullSize = false).
-     *
-     * @param component the set of portal-air blocks in this structure
-     * @return true if obsidian is present at all 4 frame corners, false otherwise
-     */
     private boolean hasObsidianOnAllCorners(Set<BlockPos> component) {
         if (mc.world == null || component.isEmpty()) return false;
 
-        // Compute bounding box of the portal-air blocks.
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
@@ -706,19 +493,11 @@ public class PortalTracker extends Module {
             if (pos.getZ() > maxZ) maxZ = pos.getZ();
         }
 
-        // Determine portal axis.
-        // Nether portals are either in the X-Z plane (face North/South, blocks
-        // span X & Y and are all at the same Z) or face East/West (blocks span
-        // Z & Y at the same X).  We identify the axis by which horizontal
-        // dimension is flat (span == 0).
-        boolean flatX = (minX == maxX); // all blocks at the same X → East/West portal
-        boolean flatZ = (minZ == maxZ); // all blocks at the same Z → North/South portal
+        boolean flatX = (minX == maxX);
+        boolean flatZ = (minZ == maxZ);
 
         BlockPos[] corners;
         if (flatZ) {
-            // North/South portal — frame corners are at the 4 XY extremes of the same Z plane.
-            // The obsidian corner blocks sit one step below minY, one step above maxY,
-            // one step left of minX, and one step right of maxX, all at the portal's Z.
             corners = new BlockPos[]{
                 new BlockPos(minX - 1, minY - 1, minZ),
                 new BlockPos(maxX + 1, minY - 1, minZ),
@@ -726,7 +505,6 @@ public class PortalTracker extends Module {
                 new BlockPos(maxX + 1, maxY + 1, minZ)
             };
         } else if (flatX) {
-            // East/West portal — frame corners are at the 4 ZY extremes of the same X plane.
             corners = new BlockPos[]{
                 new BlockPos(minX, minY - 1, minZ - 1),
                 new BlockPos(minX, minY - 1, maxZ + 1),
@@ -734,8 +512,6 @@ public class PortalTracker extends Module {
                 new BlockPos(minX, maxY + 1, maxZ + 1)
             };
         } else {
-            // Ambiguous / multi-axis (shouldn't happen with vanilla portals).
-            // Fall back to treating it as a full-size portal to avoid false custom tags.
             return true;
         }
 
@@ -745,12 +521,6 @@ public class PortalTracker extends Module {
         return true;
     }
 
-    /**
-     * Returns the stable anchor for a component: the block with the lowest Y,
-     * breaking ties by lowest X, then lowest Z. This is geometrically stable
-     * because portal blocks exist at fixed Y levels — new blocks arriving at
-     * chunk load edges cannot undercut the Y minimum.
-     */
     private BlockPos componentAnchor(Set<BlockPos> component) {
         BlockPos anchor = null;
         for (BlockPos pos : component) {
@@ -764,12 +534,6 @@ public class PortalTracker extends Module {
         return anchor;
     }
 
-    /**
-     * Returns true only if every chunk that contains at least one block of the
-     * component is present in scannedChunks. When this returns false the corner
-     * scan is deferred — we might be missing some portal blocks and therefore
-     * have the wrong bounding box.
-     */
     private boolean componentChunksFullyScanned(Set<BlockPos> component) {
         for (BlockPos pos : component) {
             if (!scannedChunks.contains(new ChunkPos(pos))) return false;
@@ -777,30 +541,6 @@ public class PortalTracker extends Module {
         return true;
     }
 
-    /**
-     * Rebuilds the structure map from the current portal block set.
-     *
-     * Size classification uses the TWO-SCAN CORNER CHECK:
-     *   Pass 1 — flood-fill builds each component and its bounding box.
-     *   Pass 2 — {@link #hasObsidianOnAllCorners} checks exactly 4 positions.
-     *
-     * Classification is deferred (kept at the conservative full-size default)
-     * until BOTH of:
-     *   • every chunk in the component is fully scanned, AND
-     *   • dimensionChangeCooldown == 0 (world data settled after a transition).
-     *
-     * Additionally, the entry portal area is excluded while exclusionTimer > 0
-     * to avoid classifying a portal before its obsidian has propagated to the
-     * client.
-     *
-     * Once confirmed, the result is cached in sizeConfirmedPortals AND
-     * crossDimensionSizeCache so it survives future dimension changes without
-     * re-running the scan.
-     *
-     * Stale entries are evicted by retainAll(activeAnchors) before the
-     * structure map is updated, eliminating any overlap window between an old
-     * anchor's cached value and a new anchor's fresh default.
-     */
     private void groupPortals() {
         Set<BlockPos> visited       = new HashSet<>();
         Set<BlockPos> activeAnchors = new HashSet<>();
@@ -835,42 +575,31 @@ public class PortalTracker extends Module {
             BlockPos anchor = componentAnchor(component);
             activeAnchors.add(anchor);
 
-            // ── TWO-SCAN SIZE CLASSIFICATION (Nether portals only) ──────────
-            // Default to PENDING — the portal will be in the structure map but
-            // the renderer skips PENDING portals entirely, so no colour is shown
-            // until we have a confirmed answer. This eliminates the flash.
             SizeState sizeState = (type == PortalType.NETHER) ? SizeState.PENDING : SizeState.EXIT;
 
             if (type == PortalType.NETHER) {
                 Boolean confirmed = sizeConfirmedPortals.get(anchor);
                 if (confirmed != null) {
-                    // Already classified in a previous pass.
                     sizeState = confirmed ? SizeState.EXIT : SizeState.CUSTOM;
                 } else {
-                    // Check the cross-dimension persistent cache first.
                     String crossKey = lastDimension + ":" + anchor.getX() + "," + anchor.getY() + "," + anchor.getZ();
                     Boolean crossCached = crossDimensionSizeCache.get(crossKey);
                     if (crossCached != null) {
                         sizeState = crossCached ? SizeState.EXIT : SizeState.CUSTOM;
                         sizeConfirmedPortals.put(anchor, crossCached);
                     } else {
-                        // Gate classification on chunk readiness AND world settle.
                         boolean chunkReady   = componentChunksFullyScanned(component);
                         boolean worldSettled = dimensionChangeCooldown <= 0;
-
-                        // Also defer if this component overlaps the entry portal exclusion zone.
                         boolean isEntryPortal = exclusionTimer > 0 && entryPortalPos != null
                             && component.stream().anyMatch(
                                 p -> p.getSquaredDistance(entryPortalPos) <= ENTRY_EXCLUSION_RADIUS_SQ);
 
                         if (chunkReady && worldSettled && !isEntryPortal) {
-                            // SCAN 2: corner obsidian check — authoritative, no fallback.
                             boolean allCorners = hasObsidianOnAllCorners(component);
                             sizeState = allCorners ? SizeState.EXIT : SizeState.CUSTOM;
                             sizeConfirmedPortals.put(anchor, allCorners);
                             crossDimensionSizeCache.put(crossKey, allCorners);
                         } else {
-                            // Not ready — stay PENDING and schedule a recheck next pass.
                             pendingSizeRecheck.add(anchor);
                             portalsDirty = true;
                         }
@@ -895,14 +624,8 @@ public class PortalTracker extends Module {
             }
         }
 
-        // Evict stale classification entries BEFORE updating the structure map.
-        // This closes the window where an old anchor's cached value could coexist
-        // with the new anchor's conservative default and produce two overlapping
-        // highlight boxes of different colours.
         sizeConfirmedPortals.keySet().retainAll(activeAnchors);
         pendingSizeRecheck.retainAll(activeAnchors);
-
-        // Remove render entries for anchors that are no longer active.
         portalStructureMap.keySet().retainAll(activeAnchors);
 
         if (!pendingSizeRecheck.isEmpty()) portalsDirty = true;
@@ -945,8 +668,6 @@ public class PortalTracker extends Module {
         boolean wasPortal = isTrackedPortalBlock(event.oldState.getBlock());
         boolean isPortal  = isTrackedPortalBlock(event.newState.getBlock());
 
-        // Also invalidate classification if an obsidian block near a known portal
-        // changed — a corner block being removed/added changes the classification.
         boolean wasObsidian = event.oldState.isOf(Blocks.OBSIDIAN);
         boolean isObsidian  = event.newState.isOf(Blocks.OBSIDIAN);
         boolean obsidianChanged = wasObsidian != isObsidian;
@@ -957,20 +678,13 @@ public class PortalTracker extends Module {
         dirtyChunks.add(cp); scannedChunks.remove(cp);
 
         if (obsidianChanged) {
-            // An obsidian block changed near a portal — invalidate any cached
-            // corner classifications whose component chunks touch this chunk so
-            // they are re-evaluated on the next groupPortals() pass.
             sizeConfirmedPortals.entrySet().removeIf(entry -> {
-                // We don't have direct component membership here, so we use
-                // proximity: if the anchor's chunk neighbours the dirty chunk,
-                // evict its classification to force a fresh corner scan.
                 ChunkPos anchorChunk = new ChunkPos(entry.getKey());
                 int dx = Math.abs(anchorChunk.x - cp.x);
                 int dz = Math.abs(anchorChunk.z - cp.z);
                 return dx <= 1 && dz <= 1;
             });
             crossDimensionSizeCache.entrySet().removeIf(e -> {
-                // Parse out the coordinates from "dim:x,y,z"
                 String[] parts = e.getKey().split(":");
                 if (parts.length < 2) return false;
                 String[] coords = parts[parts.length - 1].split(",");
@@ -988,10 +702,6 @@ public class PortalTracker extends Module {
             portals.remove(event.pos); portalsDirty = true;
             sizeConfirmedPortals.keySet().removeIf(anchor -> !portalStructureMap.containsKey(anchor));
             pendingSizeRecheck.remove(event.pos);
-            if (xaeroIntegration.get()) {
-                WaypointEntry entry = xaeroTrackedPortals.remove(event.pos);
-                if (entry != null) { XaeroPortalBridge.unwatch(event.pos); confirmPortalRemoved(event.pos, entry, lastDimension); }
-            }
         }
     }
 
@@ -1007,7 +717,6 @@ public class PortalTracker extends Module {
         if (showBeam.get() && onlyNearestBeam.get()) {
             double minSq = Double.MAX_VALUE;
             for (PortalStructure structure : snapshot) {
-                if (onlyShowCreated.get() && !structure.isCreated) continue;
                 if (structure.type == PortalType.NETHER && !structure.isClassified()) continue;
                 double cx = (structure.boundingBox.minX + structure.boundingBox.maxX) * 0.5;
                 double cy = (structure.boundingBox.minY + structure.boundingBox.maxY) * 0.5;
@@ -1018,9 +727,6 @@ public class PortalTracker extends Module {
         }
 
         for (PortalStructure structure : snapshot) {
-            if (onlyShowCreated.get() && !structure.isCreated) continue;
-            // Skip portals whose size classification is not yet confirmed — this
-            // prevents the exit→custom colour flash on dimension entry.
             if (structure.type == PortalType.NETHER && !structure.isClassified()) continue;
 
             SettingColor color = getSettingColor(structure.type, structure.isFullSize());
@@ -1237,27 +943,6 @@ public class PortalTracker extends Module {
         };
     }
 
-    // ── Setting Handlers ───────────────────────────────────────────
-    private void handleReset(boolean value) {
-        if (!value) return;
-        int old = totalCreated; totalCreated = 0;
-        createdPortals.clear(); notifiedStructures.clear();
-        xaeroTrackedPortals.clear(); XaeroPortalBridge.clearWatched();
-        sessionStartTime = System.currentTimeMillis(); portalsDirty = true;
-        info("Session cleared. Reset " + old + " created portal" + (old == 1 ? "" : "s") + ".");
-        resetButton.set(false);
-    }
-
-    // ── Public API ─────────────────────────────────────────────────
-    public boolean isPortalGuiEnabled() { return isActive(); }
-    public int getTotalPortals()         { return portalStructureMap.size(); }
-    public int getTotalCreated()         { return totalCreated; }
-
-    public void markChunkDirty(ChunkPos chunkPos) {
-        if (chunkPos == null) return;
-        dirtyChunks.add(chunkPos); scannedChunks.remove(chunkPos);
-    }
-
     // ── Utilities ──────────────────────────────────────────────────
     private void sendMessage(String message) {
         long now = System.currentTimeMillis();
@@ -1276,6 +961,16 @@ public class PortalTracker extends Module {
         };
     }
 
+    // ── Public API ─────────────────────────────────────────────────
+    public boolean isPortalGuiEnabled() { return isActive(); }
+    public int getTotalPortals()         { return portalStructureMap.size(); }
+    public int getTotalCreated()         { return totalCreated; }
+
+    public void markChunkDirty(ChunkPos chunkPos) {
+        if (chunkPos == null) return;
+        dirtyChunks.add(chunkPos); scannedChunks.remove(chunkPos);
+    }
+
     // ── Inner Types ────────────────────────────────────────────────
     private enum PortalType {
         NETHER("Nether Portal"), END_PORTAL("End Portal"), END_GATEWAY("End Gateway");
@@ -1284,26 +979,13 @@ public class PortalTracker extends Module {
         public String getDisplayName()  { return displayName; }
     }
 
-    /**
-     * Three-state size classification for Nether portals.
-     *
-     * PENDING  — corner scan not yet possible (chunks still loading or world
-     *            still settling after a dimension change). The portal is
-     *            registered in portalStructureMap but skipped by the renderer
-     *            so the player never sees a wrong colour flash.
-     * EXIT     — obsidian confirmed at all 4 frame corners.
-     * CUSTOM   — at least one frame corner is missing obsidian.
-     *
-     * Non-Nether portals always use EXIT (the value is ignored by the colour
-     * picker for End portals / gateways, but a concrete value avoids null).
-     */
     private enum SizeState { PENDING, EXIT, CUSTOM }
 
     private static class PortalStructure {
         final Box           boundingBox;
         final Set<BlockPos> portalBlocks;
         final boolean       isCreated;
-        final SizeState     sizeState;   // replaces boolean isFullSize
+        final SizeState     sizeState;
         final PortalType    type;
 
         PortalStructure(Box bb, Set<BlockPos> pb, boolean ic, SizeState ss, PortalType t) {
@@ -1314,63 +996,9 @@ public class PortalTracker extends Module {
             this.type         = t;
         }
 
-        /** Convenience — true only when classification is confirmed and portal is exit-sized. */
-        boolean isFullSize() { return sizeState == SizeState.EXIT; }
-
-        /** True when the portal has a confirmed classification and can be rendered. */
-        boolean isClassified() { return sizeState != SizeState.PENDING; }
+        boolean isFullSize()    { return sizeState == SizeState.EXIT; }
+        boolean isClassified()  { return sizeState != SizeState.PENDING; }
     }
 
     private record BeamData(Box box, SettingColor color) {}
-
-    // ── Platform 9¾ ───────────────────────────────────────────────
-    private void startPlatformBuild() {
-        if (mc.player == null || mc.currentScreen != null) return;
-        platformPositions.clear(); platformIndex = 0; platformTimer = 0;
-        BlockPos center;
-        if (mc.crosshairTarget instanceof BlockHitResult bhr && bhr.getType() == HitResult.Type.BLOCK)
-            center = bhr.getBlockPos();
-        else center = mc.player.getBlockPos().down();
-        int r = 2;
-        for (int x = -r; x <= r; x++) for (int z = -r; z <= r; z++) {
-            if (x == 0 && z == 0) continue;
-            platformPositions.add(center.add(x, 0, z));
-        }
-        BlockPos finalCenter = center;
-        platformPositions.sort(java.util.Comparator.comparingDouble(p -> p.getSquaredDistance(finalCenter)));
-        info("Building Platform 9\u00BE...");
-    }
-
-    private void handlePlatformBuilding() {
-        if (platformPositions.isEmpty()) return;
-        if (platformIndex >= platformPositions.size()) { platformPositions.clear(); info("Platform 9\u00BE complete."); return; }
-        if (platformTimer > 0) { platformTimer--; return; }
-        if (!mc.player.getMainHandStack().isOf(Items.OBSIDIAN)) {
-            FindItemResult obsidian = InvUtils.find(Items.OBSIDIAN);
-            if (!obsidian.found()) { error("No obsidian found for platform."); platformPositions.clear(); return; }
-            if (obsidian.isHotbar()) InvUtils.swap(obsidian.slot(), false);
-            else InvUtils.move().from(obsidian.slot()).toHotbar(mc.player.getInventory().selectedSlot);
-        }
-        BlockPos target = platformPositions.get(platformIndex);
-        if (!mc.world.getBlockState(target).isReplaceable()) { platformIndex++; platformTimer = 0; return; }
-        if (placeBlock(target)) { platformIndex++; platformTimer = platformDelay.get(); }
-        else platformIndex++;
-    }
-
-    private boolean placeBlock(BlockPos pos) {
-        for (Direction side : Direction.values()) {
-            BlockPos neighbor = pos.offset(side);
-            if (!mc.world.getBlockState(neighbor).isReplaceable()) {
-                Direction placeFace = side.getOpposite();
-                Vec3d hitPos = Vec3d.ofCenter(neighbor).add(Vec3d.of(placeFace.getVector()).multiply(0.5));
-                Rotations.rotate(Rotations.getYaw(hitPos), Rotations.getPitch(hitPos), () -> {
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND,
-                        new BlockHitResult(hitPos, placeFace, neighbor, false));
-                    mc.player.swingHand(Hand.MAIN_HAND);
-                });
-                return true;
-            }
-        }
-        return false;
-    }
 }

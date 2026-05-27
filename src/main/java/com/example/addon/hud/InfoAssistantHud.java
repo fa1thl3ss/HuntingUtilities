@@ -1,9 +1,14 @@
 package com.example.addon.hud;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
 import com.example.addon.HuntingUtilities;
 
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -15,10 +20,6 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
-
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
 
 /**
  * Info Assistant HUD
@@ -50,6 +51,15 @@ public class InfoAssistantHud extends HudElement {
         .description("Press this key to show or hide Info Assistant.")
         .defaultValue(Keybind.none())
         .action(this::onToggleKey)
+        .build()
+    );
+
+    private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
+        .name("scale")
+        .description("Scale of the HUD element.")
+        .defaultValue(1.0)
+        .min(0.25)
+        .sliderRange(0.25, 4.0)
         .build()
     );
 
@@ -200,11 +210,12 @@ public class InfoAssistantHud extends HudElement {
 
         // ── Layout constants ──────────────────────────────────────────────────────
 
-        final double padH   = 6;
-        final double padV   = 4;
-        final double rowGap = 2;
-        final double colGap = 8;
-        final double lh     = renderer.textHeight(false, 1);
+        final double s      = scale.get();
+        final double padH   = 6 * s;
+        final double padV   = 4 * s;
+        final double rowGap = 2 * s;
+        final double colGap = 8 * s;
+        final double lh     = renderer.textHeight(false, s);
         final boolean right = alignment.get() == Alignment.Right;
 
         // ── Measure columns ───────────────────────────────────────────────────────
@@ -216,17 +227,17 @@ public class InfoAssistantHud extends HudElement {
 
         for (Row r : rows) {
             if (r.isHeader()) {
-                catMaxW = Math.max(catMaxW, renderer.textWidth(r.label(), false, 1));
+                catMaxW = Math.max(catMaxW, renderer.textWidth(r.label(), false, s));
             } else {
-                colAW = Math.max(colAW, renderer.textWidth(r.label(), false, 1));
-                colBW = Math.max(colBW, renderer.textWidth("(KB) " + r.key(), false, 1));
+                colAW = Math.max(colAW, renderer.textWidth(r.label(), false, s));
+                colBW = Math.max(colBW, renderer.textWidth("(KB) " + r.key(), false, s));
                 if (showDescriptions.get())
-                    colCW = Math.max(colCW, renderer.textWidth(r.description(), false, 1));
+                    colCW = Math.max(colCW, renderer.textWidth(r.description(), false, s));
             }
         }
 
-        double sepW   = renderer.textWidth(" | ", false, 1);
-        double titleW = showTitle.get() ? renderer.textWidth("Info Assistant", false, 1) : 0;
+        double sepW   = renderer.textWidth(" | ", false, s);
+        double titleW = showTitle.get() ? renderer.textWidth("Info Assistant", false, s) : 0;
 
         double contentW = colAW + colGap + colBW + (showDescriptions.get() ? sepW + colCW : 0);
         double innerW   = Math.max(Math.max(contentW, titleW), catMaxW);
@@ -246,9 +257,9 @@ public class InfoAssistantHud extends HudElement {
 
         if (showTitle.get()) {
             double rowY = rowY(idx, y, padV, lh, rowGap);
-            double tw   = renderer.textWidth("Info Assistant", false, 1);
+            double tw   = renderer.textWidth("Info Assistant", false, s);
             double tx   = right ? x + totalW - padH - tw : x + padH;
-            renderer.text("Info Assistant", tx, rowY, titleColor.get(), false, 1);
+            renderer.text("Info Assistant", tx, rowY, titleColor.get(), false, s);
             idx++;
         }
 
@@ -256,45 +267,45 @@ public class InfoAssistantHud extends HudElement {
             double rowY = rowY(idx, y, padV, lh, rowGap);
 
             if (row.isHeader()) {
-                double hw = renderer.textWidth(row.label(), false, 1);
+                double hw = renderer.textWidth(row.label(), false, s);
                 double hx = right ? x + totalW - padH - hw : x + padH;
-                renderer.text(row.label(), hx, rowY, categoryColor.get(), false, 1);
+                renderer.text(row.label(), hx, rowY, categoryColor.get(), false, s);
 
             } else {
                 String kbTag   = "(KB) ";
-                double kbTagW  = renderer.textWidth(kbTag, false, 1);
-                double keyValW = renderer.textWidth(row.key(), false, 1);
-                double nameW   = renderer.textWidth(row.label(), false, 1);
+                double kbTagW  = renderer.textWidth(kbTag, false, s);
+                double keyValW = renderer.textWidth(row.key(), false, s);
+                double nameW   = renderer.textWidth(row.label(), false, s);
 
                 if (right) {
                     double cx = x + totalW - padH;
 
                     if (showDescriptions.get()) {
-                        double dw = renderer.textWidth(row.description(), false, 1);
+                        double dw = renderer.textWidth(row.description(), false, s);
                         cx -= dw;
-                        renderer.text(row.description(), cx, rowY, descriptionColor.get(), false, 1);
+                        renderer.text(row.description(), cx, rowY, descriptionColor.get(), false, s);
                         cx -= sepW;
-                        renderer.text(" | ", cx, rowY, separatorColor.get(), false, 1);
+                        renderer.text(" | ", cx, rowY, separatorColor.get(), false, s);
                     }
 
                     cx -= keyValW;
-                    renderer.text(row.key(), cx, rowY, keyColor.get(), false, 1);
+                    renderer.text(row.key(), cx, rowY, keyColor.get(), false, s);
                     cx -= kbTagW;
-                    renderer.text(kbTag, cx, rowY, kbTagColor.get(), false, 1);
+                    renderer.text(kbTag, cx, rowY, kbTagColor.get(), false, s);
                     cx -= colGap + nameW;
-                    renderer.text(row.label(), cx, rowY, moduleColor.get(), false, 1);
+                    renderer.text(row.label(), cx, rowY, moduleColor.get(), false, s);
 
                 } else {
-                    renderer.text(row.label(), x + padH, rowY, moduleColor.get(), false, 1);
+                    renderer.text(row.label(), x + padH, rowY, moduleColor.get(), false, s);
 
                     double bx = x + padH + colAW + colGap;
-                    renderer.text(kbTag, bx, rowY, kbTagColor.get(), false, 1);
-                    renderer.text(row.key(), bx + kbTagW, rowY, keyColor.get(), false, 1);
+                    renderer.text(kbTag, bx, rowY, kbTagColor.get(), false, s);
+                    renderer.text(row.key(), bx + kbTagW, rowY, keyColor.get(), false, s);
 
                     if (showDescriptions.get()) {
                         double sepX = x + padH + colAW + colGap + colBW;
-                        renderer.text(" | ", sepX, rowY, separatorColor.get(), false, 1);
-                        renderer.text(row.description(), sepX + sepW, rowY, descriptionColor.get(), false, 1);
+                        renderer.text(" | ", sepX, rowY, separatorColor.get(), false, s);
+                        renderer.text(row.description(), sepX + sepW, rowY, descriptionColor.get(), false, s);
                     }
                 }
             }

@@ -6,6 +6,7 @@ import com.example.addon.HuntingUtilities;
 
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
@@ -17,12 +18,11 @@ import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.misc.input.Input;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
-import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Item;
 import net.minecraft.item.Items;
+import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.Hand;
 
@@ -33,6 +33,26 @@ public class ElytraAssistant extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     public enum MiddleClickAction { None, Rocket, Pearl }
+
+    public enum WarningSound {
+        Anvil,
+        WitherSpawn,
+        CreeperPrimed,
+        ExperienceOrb,
+        Bell,
+        NoteBassDrum;
+
+        public SoundEvent toSoundEvent() {
+            return switch (this) {
+                case Anvil         -> SoundEvents.BLOCK_ANVIL_LAND;
+                case WitherSpawn   -> SoundEvents.ENTITY_WITHER_SPAWN;
+                case CreeperPrimed -> SoundEvents.ENTITY_CREEPER_PRIMED;
+                case ExperienceOrb -> SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP;
+                case Bell          -> SoundEvents.BLOCK_BELL_USE;
+                case NoteBassDrum  -> SoundEvents.BLOCK_NOTE_BLOCK_BASEDRUM.value();
+            };
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Setting Groups
@@ -58,6 +78,24 @@ public class ElytraAssistant extends Module {
         .defaultValue(10)
         .min(1)
         .sliderMax(100)
+        .visible(enableAutoSwap::get)
+        .build()
+    );
+
+    private final Setting<WarningSound> warningSoundType = sgDurability.add(new EnumSetting.Builder<WarningSound>()
+        .name("warning-sound")
+        .description("Sound played when no replacement elytra is available.")
+        .defaultValue(WarningSound.Anvil)
+        .visible(enableAutoSwap::get)
+        .build()
+    );
+
+    private final Setting<Double> warningSoundVolume = sgDurability.add(new DoubleSetting.Builder()
+        .name("warning-volume")
+        .description("Volume of the no-replacement warning sound.")
+        .defaultValue(1.0)
+        .min(0.1)
+        .sliderMax(2.0)
         .visible(enableAutoSwap::get)
         .build()
     );
@@ -113,11 +151,11 @@ public class ElytraAssistant extends Module {
 
     private static final double AFK_INTERVAL_SECONDS = 15.0;
 
-    private boolean noReplacementWarned   = false;
-    private boolean noUsableElytraWarned  = false;
-    private boolean wasMiddlePressed      = false;
-    private int     middleClickTimer      = 0;
-    private int     swingTimer            = 0;
+    private boolean noReplacementWarned  = false;
+    private boolean noUsableElytraWarned = false;
+    private boolean wasMiddlePressed     = false;
+    private int     middleClickTimer     = 0;
+    private int     swingTimer           = 0;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -133,11 +171,11 @@ public class ElytraAssistant extends Module {
 
     @Override
     public void onActivate() {
-        noReplacementWarned   = false;
-        noUsableElytraWarned  = false;
-        wasMiddlePressed      = false;
-        middleClickTimer      = 0;
-        swingTimer            = 0;
+        noReplacementWarned  = false;
+        noUsableElytraWarned = false;
+        wasMiddlePressed     = false;
+        middleClickTimer     = 0;
+        swingTimer           = 0;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -203,13 +241,13 @@ public class ElytraAssistant extends Module {
             noReplacementWarned = false;
         } else if (!noReplacementWarned) {
             warning("No replacement elytra available!");
-            mc.player.playSound(SoundEvents.BLOCK_ANVIL_LAND, 0.5f, 1.0f);
+            playWarningSound();
             noReplacementWarned = true;
         }
     }
 
     private FindItemResult findUsableElytra() {
-        int bestSlot = -1;
+        int bestSlot       = -1;
         int bestDurability = -1;
 
         for (int i = 0; i < mc.player.getInventory().main.size(); i++) {
@@ -233,6 +271,18 @@ public class ElytraAssistant extends Module {
 
     private int getSlotId(int slot) {
         return (slot >= 0 && slot < 9) ? 36 + slot : slot;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Sound Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void playWarningSound() {
+        mc.player.playSound(
+            warningSoundType.get().toSoundEvent(),
+            warningSoundVolume.get().floatValue(),
+            1.0f
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -260,8 +310,8 @@ public class ElytraAssistant extends Module {
     private void runMiddleClickAction() {
         if (mc.currentScreen != null) return;
 
-        MiddleClickAction action = middleClickAction.get();
-        FindItemResult itemResult = null;
+        MiddleClickAction action     = middleClickAction.get();
+        FindItemResult    itemResult = null;
 
         if (action == MiddleClickAction.Rocket) {
             if (preventGroundUsage.get() && mc.player.isOnGround()) return;

@@ -18,12 +18,14 @@ public class PortalTrackerHud extends HudElement {
 
     public static final HudElementInfo<PortalTrackerHud> INFO = new HudElementInfo<>(
         HuntingUtilities.HUD_GROUP,
-        "portal-tracker-hud",
+        "portal-tracker",
         "Displays portals in the area and total portals created this session.",
         PortalTrackerHud::new
     );
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    // ── Scale ────────────────────────────────────────────────────────────────
 
     private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
         .name("scale")
@@ -33,6 +35,24 @@ public class PortalTrackerHud extends HudElement {
         .sliderRange(0.25, 4.0)
         .build()
     );
+
+    // ── Field visibility ─────────────────────────────────────────────────────
+
+    private final Setting<Boolean> showPortalsInArea = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-portals-in-area")
+        .description("Show the portals in area count.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Boolean> showPortalsCreated = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-portals-created")
+        .description("Show the total portals created this session.")
+        .defaultValue(true)
+        .build()
+    );
+
+    // ── Colors ───────────────────────────────────────────────────────────────
 
     private final Setting<SettingColor> labelColor = sgGeneral.add(new ColorSetting.Builder()
         .name("label-color")
@@ -53,6 +73,8 @@ public class PortalTrackerHud extends HudElement {
         .build()
     );
 
+    // ── Background ───────────────────────────────────────────────────────────
+
     private final Setting<Boolean> showBackground = sgGeneral.add(new BoolSetting.Builder()
         .name("background")
         .description("Show a background highlight behind the text.")
@@ -67,6 +89,8 @@ public class PortalTrackerHud extends HudElement {
         .build()
     );
 
+    // ═══════════════════════════════════════════════════════════════════════════
+
     public PortalTrackerHud() {
         super(INFO);
     }
@@ -80,6 +104,17 @@ public class PortalTrackerHud extends HudElement {
             return;
         }
 
+        boolean showArea    = showPortalsInArea.get();
+        boolean showCreated = showPortalsCreated.get();
+
+        // Nothing to render
+        if (!showArea && !showCreated) {
+            setSize(0, 0);
+            return;
+        }
+
+        boolean showSep = showArea && showCreated;
+
         double s = scale.get();
 
         double padH       = 4 * s;
@@ -87,18 +122,17 @@ public class PortalTrackerHud extends HudElement {
         double lineHeight = renderer.textHeight(false, s);
         double sepW       = renderer.textWidth(" | ", false, s);
 
-        // Found = live area count (resets as portals leave range)
-        // Created = ongoing session total (never resets mid-session)
         String foundLabel   = "Portals in Area: ";
         String foundValue   = String.valueOf(tracker.getTotalPortals());
         String createdLabel = "Portals Created: ";
         String createdValue = String.valueOf(tracker.getTotalCreated());
 
-        double totalTextW = renderer.textWidth(foundLabel,   false, s)
-                          + renderer.textWidth(foundValue,   false, s)
-                          + sepW
-                          + renderer.textWidth(createdLabel, false, s)
-                          + renderer.textWidth(createdValue, false, s);
+        double totalTextW = 0;
+        if (showArea)    totalTextW += renderer.textWidth(foundLabel,   false, s)
+                                     + renderer.textWidth(foundValue,   false, s);
+        if (showSep)     totalTextW += sepW;
+        if (showCreated) totalTextW += renderer.textWidth(createdLabel, false, s)
+                                     + renderer.textWidth(createdValue, false, s);
 
         double totalW = totalTextW + padH * 2;
         double totalH = lineHeight + padV * 2;
@@ -109,11 +143,23 @@ public class PortalTrackerHud extends HudElement {
         double cx   = x + padH;
         double rowY = y + padV;
 
-        renderer.text(foundLabel,   cx, rowY, labelColor.get(),     false, s); cx += renderer.textWidth(foundLabel,   false, s);
-        renderer.text(foundValue,   cx, rowY, valueColor.get(),     false, s); cx += renderer.textWidth(foundValue,   false, s);
-        renderer.text(" | ",        cx, rowY, separatorColor.get(), false, s); cx += sepW;
-        renderer.text(createdLabel, cx, rowY, labelColor.get(),     false, s); cx += renderer.textWidth(createdLabel, false, s);
-        renderer.text(createdValue, cx, rowY, valueColor.get(),     false, s);
+        if (showArea) {
+            renderer.text(foundLabel, cx, rowY, labelColor.get(), false, s);
+            cx += renderer.textWidth(foundLabel, false, s);
+            renderer.text(foundValue, cx, rowY, valueColor.get(), false, s);
+            cx += renderer.textWidth(foundValue, false, s);
+        }
+
+        if (showSep) {
+            renderer.text(" | ", cx, rowY, separatorColor.get(), false, s);
+            cx += sepW;
+        }
+
+        if (showCreated) {
+            renderer.text(createdLabel, cx, rowY, labelColor.get(), false, s);
+            cx += renderer.textWidth(createdLabel, false, s);
+            renderer.text(createdValue, cx, rowY, valueColor.get(), false, s);
+        }
 
         setSize(totalW, totalH);
     }

@@ -7,13 +7,11 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(Camera.class)
 public abstract class ThirdSightCameraMixin {
 
-    // Shadow the protected method so we can call it from inject handlers.
     @org.spongepowered.asm.mixin.Shadow
     protected abstract void moveBy(float forward, float up, float right);
 
@@ -62,17 +60,5 @@ public abstract class ThirdSightCameraMixin {
         ThirdSight module = Modules.get().get(ThirdSight.class);
         if (module == null || !module.isFreeLookActive()) return pitch;
         return module.cameraPitch;
-    }
-
-    /**
-     * After Camera#update has fully positioned the camera, apply the lateral
-     * shoulder offset by moving along the camera's right axis.
-     * Camera#moveBy signature: moveBy(forward, up, right).
-     */
-    @Inject(method = "update", at = @At("RETURN"))
-    private void onUpdateReturn(CallbackInfo ci) {
-        ThirdSight module = Modules.get().get(ThirdSight.class);
-        if (module == null || !module.isActive() || module.lateralOffset == 0f) return;
-        moveBy(0, 0, module.lateralOffset);
     }
 }

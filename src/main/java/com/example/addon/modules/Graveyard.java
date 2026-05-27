@@ -21,14 +21,19 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.component.DataComponentTypes;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 
 public class Graveyard extends Module {
-    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final SettingGroup sgGeneral     = settings.getDefaultGroup();
+    private final SettingGroup sgEnchantment = settings.createGroup("Enchantment Filter");
+
+    // ── General ───────────────────────────────────────────────────────────────
 
     private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
         .name("range")
@@ -95,7 +100,7 @@ public class Graveyard extends Module {
             Items.ENCHANTED_GOLDEN_APPLE,
             Items.FIREWORK_ROCKET, Items.DIAMOND_PICKAXE, Items.DIAMOND_AXE,
             Items.DIAMOND_SHOVEL,
-            Items.DIAMOND_SWORD, 
+            Items.DIAMOND_SWORD,
             Items.DIAMOND_HOE,
             Items.SHULKER_BOX,
             Items.WHITE_SHULKER_BOX, Items.ORANGE_SHULKER_BOX, Items.MAGENTA_SHULKER_BOX, Items.LIGHT_BLUE_SHULKER_BOX,
@@ -109,9 +114,35 @@ public class Graveyard extends Module {
         .build()
     );
 
-    // Cache for items to render
-    private final List<ItemEntity> itemsToRender = new ArrayList<>();
-    private final Set<Integer> notifiedItemEntities = new HashSet<>();
+    // ── Enchantment Filter ────────────────────────────────────────────────────
+
+    private final Setting<Boolean> enchantedOnly = sgEnchantment.add(new BoolSetting.Builder()
+        .name("enchanted-only")
+        .description("Only highlight whitelisted items if they are enchanted. Items that cannot be enchanted (shulker boxes, totems, etc.) are always shown regardless.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<SettingColor> enchantedBeamColor = sgEnchantment.add(new ColorSetting.Builder()
+        .name("enchanted-beam-color")
+        .description("Beam color override for enchanted items when enchanted-only is off, so both plain and enchanted items can be told apart visually.")
+        .defaultValue(new SettingColor(180, 80, 255, 220))
+        .visible(() -> !enchantedOnly.get() && showBeam.get())
+        .build()
+    );
+
+    private final Setting<Boolean> separateEnchantedColor = sgEnchantment.add(new BoolSetting.Builder()
+        .name("separate-enchanted-color")
+        .description("Use the enchanted beam color above to visually distinguish enchanted items from plain ones.")
+        .defaultValue(false)
+        .visible(() -> !enchantedOnly.get() && showBeam.get())
+        .build()
+    );
+
+    // ── State ─────────────────────────────────────────────────────────────────
+
+    private final List<ItemEntity> itemsToRender        = new ArrayList<>();
+    private final Set<Integer>     notifiedItemEntities = new HashSet<>();
 
     public Graveyard() {
         super(HuntingUtilities.CATEGORY, "graveyard", "Highlights valuable items on the ground.");
@@ -123,76 +154,100 @@ public class Graveyard extends Module {
         itemsToRender.clear();
     }
 
+    // ── Tick ──────────────────────────────────────────────────────────────────
+
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.world == null || mc.player == null) return;
 
-        // Remove invalid IDs from the notification cache & rendering list
         notifiedItemEntities.removeIf(id -> mc.world.getEntityById(id) == null);
-
-        // Clear previous frame data
         itemsToRender.clear();
 
-        // Define search area
         Box searchArea = new Box(mc.player.getBlockPos()).expand(range.get());
 
-        // Get matching items
         List<ItemEntity> matching = mc.world.getEntitiesByClass(
             ItemEntity.class,
             searchArea,
-            e -> whitelistedItems.get().contains(e.getStack().getItem())
+            e -> {
+                ItemStack stack = e.getStack();
+                if (!whitelistedItems.get().contains(stack.getItem())) return false;
+                // When enchanted-only is on, only apply the enchantment gate to items
+                // that are actually capable of being enchanted. Items that cannot be
+                // enchanted (totems, shulker boxes, fireworks, etc.) always pass so
+                // they are never accidentally hidden.
+                if (enchantedOnly.get() && canBeEnchanted(stack) && !isEnchanted(stack)) return false;
+                return true;
+            }
         );
 
         if (matching.isEmpty()) return;
 
-        // Sort if enabled
         if (sortByDistance.get()) {
             matching.sort(Comparator.comparingDouble(e -> mc.player.squaredDistanceTo(e)));
         }
 
-
-
-
-        if (onlyNearest.get() ) {
+        if (onlyNearest.get()) {
             ItemEntity closest = matching.get(0);
             itemsToRender.add(closest);
             notifyIfNew(closest);
         } else {
             itemsToRender.addAll(matching);
-            for (ItemEntity item : matching) {
-                notifyIfNew(item);
-            }
+            for (ItemEntity item : matching) notifyIfNew(item);
         }
     }
+
+    // ── Render ────────────────────────────────────────────────────────────────
 
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (!showBeam.get() || itemsToRender.isEmpty()) return;
 
-        double halfWidth = beamWidth.get() / 2.0;
-        SettingColor c = beamColor.get();
-
-        // Calculate the top of the world (Build limit)
-        double topOfWorld = mc.world.getHeight();
+        double  halfWidth  = beamWidth.get() / 2.0;
+        double  topOfWorld = mc.world.getHeight();
+        boolean useSplit   = separateEnchantedColor.get() && !enchantedOnly.get();
 
         for (ItemEntity item : itemsToRender) {
-            Vec3d pos = item.getPos();
+            SettingColor c = (useSplit && isEnchanted(item.getStack()))
+                ? enchantedBeamColor.get()
+                : beamColor.get();
 
-            // Draw beam from item pos to top of world
-            Box beam = new Box(
+            Vec3d pos  = item.getPos();
+            Box   beam = new Box(
                 pos.x - halfWidth, pos.y, pos.z - halfWidth,
                 pos.x + halfWidth, topOfWorld, pos.z + halfWidth
             );
-
             event.renderer.box(beam, c, c, ShapeMode.Both, 0);
         }
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Returns true if the stack carries at least one enchantment.
+     * Checks both regular enchantments and stored enchantments (books).
+     */
+    private boolean isEnchanted(ItemStack stack) {
+        var enchants = stack.get(DataComponentTypes.ENCHANTMENTS);
+        if (enchants != null && !enchants.isEmpty()) return true;
+        var stored = stack.get(DataComponentTypes.STORED_ENCHANTMENTS);
+        return stored != null && !stored.isEmpty();
+    }
+
+    /**
+     * Returns true if this item type is capable of receiving enchantments via
+     * an enchanting table or anvil. Uses Minecraft's own isEnchantable() check
+     * so it covers all current and future enchantable items without a hard-coded
+     * list. Items that return false here are always shown when enchanted-only is
+     * on, since demanding an enchantment on something that can never have one
+     * would make it permanently invisible.
+     */
+    private boolean canBeEnchanted(ItemStack stack) {
+        return stack.isEnchantable();
+    }
+
     private void notifyIfNew(ItemEntity item) {
         int id = item.getId();
-        if (notifiedItemEntities.contains(id)) return;
-
-        notifiedItemEntities.add(id);
+        if (!notifiedItemEntities.add(id)) return;
 
         if (notification.get()) {
             String name = item.getStack().getName().getString();

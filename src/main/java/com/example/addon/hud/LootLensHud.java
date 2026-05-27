@@ -18,7 +18,7 @@ public class LootLensHud extends HudElement {
 
     public static final HudElementInfo<LootLensHud> INFO = new HudElementInfo<>(
         HuntingUtilities.HUD_GROUP,
-        "loot-lens-hud",
+        "loot-lens",
         "Shows nearby double chests, shulker boxes, and ender chests from Loot Lens.",
         LootLensHud::new
     );

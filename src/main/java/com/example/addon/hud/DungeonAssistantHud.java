@@ -12,7 +12,7 @@ import java.util.Map;
 public class DungeonAssistantHud extends HudElement {
     public static final HudElementInfo<DungeonAssistantHud> INFO = new HudElementInfo<>(
         null, "Dungeon Assistant",
-        "dungeon-assistant-hud",
+        "dungeon-assistant",
         "Displays dungeon element counts.",
         DungeonAssistantHud::new
     );

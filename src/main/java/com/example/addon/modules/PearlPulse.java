@@ -28,7 +28,10 @@ import net.minecraft.block.Blocks;
 import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.registry.Registries;
+import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
@@ -37,6 +40,37 @@ import net.minecraft.world.World;
 import net.minecraft.world.chunk.WorldChunk;
 
 public class PearlPulse extends Module {
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Sound Choice
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public enum PingSound {
+        BeaconActivate   ("Beacon Activate",    SoundEvents.BLOCK_BEACON_ACTIVATE),
+        BeaconDeactivate ("Beacon Deactivate",  SoundEvents.BLOCK_BEACON_DEACTIVATE),
+        BellUse          ("Bell",               SoundEvents.BLOCK_BELL_USE),
+        ExperienceOrb    ("Experience Orb",     SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP),
+        PlayerLevelUp    ("Level Up",           SoundEvents.ENTITY_PLAYER_LEVELUP),
+        NoteBlockBell    ("Note Bell",          reg("block.note_block.bell")),
+        NoteBlockChime   ("Note Chime",         reg("block.note_block.chime")),
+        NoteBlockPling   ("Note Pling",         reg("block.note_block.pling")),
+        EnderEye         ("Ender Eye",          SoundEvents.ENTITY_ENDER_EYE_LAUNCH),
+        EndermanTeleport ("Enderman Teleport",  SoundEvents.ENTITY_ENDERMAN_TELEPORT);
+
+        public final String label;
+        public final SoundEvent sound;
+
+        PingSound(String label, SoundEvent sound) {
+            this.label = label;
+            this.sound = sound;
+        }
+
+        @Override public String toString() { return label; }
+
+        private static SoundEvent reg(String id) {
+            return Registries.SOUND_EVENT.get(Identifier.of(id));
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Setting Groups
@@ -205,6 +239,14 @@ public class PearlPulse extends Module {
         .build()
     );
 
+    private final Setting<PingSound> pingSound = sgSound.add(new EnumSetting.Builder<PingSound>()
+        .name("sound")
+        .description("Which sound to play when a new stasis pearl is detected.")
+        .defaultValue(PingSound.BeaconActivate)
+        .visible(soundEnabled::get)
+        .build()
+    );
+
     private final Setting<Double> soundVolume = sgSound.add(new DoubleSetting.Builder()
         .name("volume")
         .defaultValue(1.0).min(0.1).sliderMax(2.0)
@@ -279,12 +321,12 @@ public class PearlPulse extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
-        if (mc.world.getRegistryKey() == World.NETHER) return; // Stasis pearls don't exist in the Nether
+        if (mc.world.getRegistryKey() == World.NETHER) return;
 
         // Fire any queued sound ping on the main thread.
         if (pingQueued.compareAndSet(true, false) && soundEnabled.get()) {
             mc.getSoundManager().play(PositionedSoundInstance.master(
-                SoundEvents.BLOCK_BEACON_ACTIVATE,
+                pingSound.get().sound,
                 soundPitch.get().floatValue(),
                 soundVolume.get().floatValue()
             ));
@@ -300,7 +342,6 @@ public class PearlPulse extends Module {
             int    pz  = (int) Math.floor(e.getZ());
             String key = px + "," + pz;
 
-            // Only count it as a new discovery if it is over a known column.
             if (lines.containsKey(key) && seenPearlIds.add(e.getId())) {
                 pingQueued.set(true);
             }
@@ -354,7 +395,6 @@ public class PearlPulse extends Module {
                 WorldChunk chunk = chunks.get(ChunkPos.toLong(x >> 4, z >> 4));
                 if (chunk == null) continue;
 
-                // Collect Y extents of bubble column blocks in this (x, z) stack.
                 int lowestY  = Integer.MAX_VALUE;
                 int highestY = Integer.MIN_VALUE;
                 for (int y = minY; y <= maxY; y++) {
@@ -366,7 +406,6 @@ public class PearlPulse extends Module {
 
                 if (lowestY == Integer.MAX_VALUE) continue;
 
-                // Walk downward to find the true source block below the column.
                 int srcY      = lowestY - 1;
                 int srcYfloor = Math.max(srcY - 384, -64);
                 while (srcY >= srcYfloor) {
@@ -378,7 +417,6 @@ public class PearlPulse extends Module {
                     }
                 }
 
-                // Accept only soul-sand sources (upward columns).
                 if (chunk.getBlockState(new BlockPos(x, srcY, z)).getBlock()
                         != Blocks.SOUL_SAND) continue;
 
@@ -422,7 +460,6 @@ public class PearlPulse extends Module {
 
         int r = range.get();
 
-        // Map each column key to the Y position of its stasis pearl (if any).
         Map<String, Double>  colKeyToPearlY = new HashMap<>();
         Map<String, Vec3d[]> lines          = columnLines.get();
 
@@ -441,7 +478,6 @@ public class PearlPulse extends Module {
             }
         }
 
-        // Cache settings once per frame.
         SettingColor core      = coreColor.get();
         SettingColor glow      = glowColor.get();
         double       halfCore  = coreWidth.get();
@@ -458,7 +494,6 @@ public class PearlPulse extends Module {
         for (Map.Entry<String, Vec3d[]> entry : lines.entrySet()) {
             Double pearlY = colKeyToPearlY.get(entry.getKey());
 
-            // Only render columns that have a stasis pearl sitting above them.
             if (pearlY == null) continue;
 
             Vec3d[] line   = entry.getValue();
@@ -467,13 +502,11 @@ public class PearlPulse extends Module {
             double bottomY = line[0].y;
             double topY    = pearlY;
 
-            // ── Beam ─────────────────────────────────────────────────────────
             if (doBeam) {
                 drawGlowBeam(event, cx, bottomY, cz, topY,
                     core, glow, halfCore, spread, layers, baseAlpha);
             }
 
-            // ── Cap boxes ────────────────────────────────────────────────────
             if (doCap) {
                 boolean drawBottom = (cap == CapPosition.BOTTOM || cap == CapPosition.BOTH);
                 boolean drawTop    = (cap == CapPosition.TOP    || cap == CapPosition.BOTH);
@@ -495,7 +528,6 @@ public class PearlPulse extends Module {
                                double cx, double bottomY, double cz, double topY,
                                SettingColor core, SettingColor glow,
                                double halfCore, double spread, int layers, int baseAlpha) {
-        // Bloom rings — sides only, fading outward.
         for (int i = layers; i >= 1; i--) {
             double expansion = spread * i;
             int    alpha     = Math.max(4, (int)(baseAlpha * (1.0 - (double)(i - 1) / layers)));
@@ -506,7 +538,6 @@ public class PearlPulse extends Module {
                 ShapeMode.Sides, 0);
         }
 
-        // Solid core.
         event.renderer.box(
             new Box(cx - halfCore, bottomY, cz - halfCore,
                     cx + halfCore, topY,    cz + halfCore),
@@ -526,7 +557,6 @@ public class PearlPulse extends Module {
         double minY = y - halfY;
         double maxY = y + halfY;
 
-        // Bloom rings — expand XZ only, keep Y fixed so the disc stays flat.
         if (bloom) {
             for (int i = layers; i >= 1; i--) {
                 double expansion = spread * i;
@@ -539,7 +569,6 @@ public class PearlPulse extends Module {
             }
         }
 
-        // The cap disc itself.
         event.renderer.box(
             new Box(cx - halfXZ, minY, cz - halfXZ,
                     cx + halfXZ, maxY, cz + halfXZ),

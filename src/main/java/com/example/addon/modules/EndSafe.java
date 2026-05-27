@@ -40,17 +40,28 @@ public class EndSafe extends Module {
     // -------------------------------------------------------------------------
     // Setting groups
     // -------------------------------------------------------------------------
-    private final SettingGroup sgGeneral    = settings.getDefaultGroup();
-    private final SettingGroup sgWarn       = settings.createGroup("Warning Ping");
-    private final SettingGroup sgDisconnect = settings.createGroup("Auto Disconnect");
+    private final SettingGroup sgGeneral      = settings.getDefaultGroup();
+    private final SettingGroup sgWarn         = settings.createGroup("Warning Ping");
+    private final SettingGroup sgDisconnect   = settings.createGroup("Auto Disconnect");
+    private final SettingGroup sgOverworld    = settings.createGroup("Overworld Thresholds");
+    private final SettingGroup sgEnd          = settings.createGroup("End Thresholds");
+    private final SettingGroup sgGrace        = settings.createGroup("Grace Period");
 
     // -------------------------------------------------------------------------
     // General
     // -------------------------------------------------------------------------
     private final Setting<Boolean> endOnly = sgGeneral.add(new BoolSetting.Builder()
         .name("end-only")
-        .description("Only activate in The End. Disable to protect against the void in any dimension.")
+        .description("Only activate in The End. Disable to also protect in the Overworld.")
         .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Boolean> perDimensionThresholds = sgGeneral.add(new BoolSetting.Builder()
+        .name("per-dimension-thresholds")
+        .description("Use separate warn and disconnect Y levels for the Overworld and End instead of shared values.")
+        .defaultValue(false)
+        .visible(() -> !endOnly.get())
         .build()
     );
 
@@ -66,7 +77,7 @@ public class EndSafe extends Module {
 
     private final Setting<Integer> warnY = sgWarn.add(new IntSetting.Builder()
         .name("warn-y-level")
-        .description("Y level at which the warning ping triggers.")
+        .description("Y level at which the warning ping triggers. Used when per-dimension-thresholds is off.")
         .defaultValue(0)
         .range(-128, 320)
         .sliderRange(-128, 320)
@@ -110,7 +121,7 @@ public class EndSafe extends Module {
 
     private final Setting<Integer> disconnectY = sgDisconnect.add(new IntSetting.Builder()
         .name("disconnect-y-level")
-        .description("Y level at which auto-disconnect triggers. Should be lower than warn-y-level.")
+        .description("Y level at which auto-disconnect triggers. Used when per-dimension-thresholds is off.")
         .defaultValue(-10)
         .range(-128, 320)
         .sliderRange(-128, 320)
@@ -118,10 +129,77 @@ public class EndSafe extends Module {
     );
 
     // -------------------------------------------------------------------------
+    // Overworld Thresholds
+    // -------------------------------------------------------------------------
+    private final Setting<Integer> overworldWarnY = sgOverworld.add(new IntSetting.Builder()
+        .name("warn-y-level")
+        .description("Overworld Y level at which the warning triggers.")
+        .defaultValue(-60)
+        .range(-128, 320)
+        .sliderRange(-128, 320)
+        .visible(() -> !endOnly.get() && perDimensionThresholds.get())
+        .build()
+    );
+
+    private final Setting<Integer> overworldDisconnectY = sgOverworld.add(new IntSetting.Builder()
+        .name("disconnect-y-level")
+        .description("Overworld Y level at which auto-disconnect triggers.")
+        .defaultValue(-70)
+        .range(-128, 320)
+        .sliderRange(-128, 320)
+        .visible(() -> !endOnly.get() && perDimensionThresholds.get())
+        .build()
+    );
+
+    // -------------------------------------------------------------------------
+    // End Thresholds
+    // -------------------------------------------------------------------------
+    private final Setting<Integer> endWarnY = sgEnd.add(new IntSetting.Builder()
+        .name("warn-y-level")
+        .description("End Y level at which the warning triggers.")
+        .defaultValue(0)
+        .range(-128, 320)
+        .sliderRange(-128, 320)
+        .visible(() -> perDimensionThresholds.get() || endOnly.get())
+        .build()
+    );
+
+    private final Setting<Integer> endDisconnectY = sgEnd.add(new IntSetting.Builder()
+        .name("disconnect-y-level")
+        .description("End Y level at which auto-disconnect triggers.")
+        .defaultValue(-10)
+        .range(-128, 320)
+        .sliderRange(-128, 320)
+        .visible(() -> perDimensionThresholds.get() || endOnly.get())
+        .build()
+    );
+
+    // -------------------------------------------------------------------------
+    // Grace Period
+    // -------------------------------------------------------------------------
+    private final Setting<Boolean> graceEnabled = sgGrace.add(new BoolSetting.Builder()
+        .name("grace-enabled")
+        .description("Wait a set number of ticks below the threshold before firing warnings or disconnect. Prevents false triggers from lag spikes or brief knockback.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Integer> graceTicks = sgGrace.add(new IntSetting.Builder()
+        .name("grace-ticks")
+        .description("How many consecutive ticks the player must be below the threshold before actions fire (20 = 1 second).")
+        .defaultValue(10)
+        .range(1, 100)
+        .sliderRange(1, 60)
+        .visible(graceEnabled::get)
+        .build()
+    );
+
+    // -------------------------------------------------------------------------
     // State
     // -------------------------------------------------------------------------
-    private boolean hasDisconnected = false;
-    private int warnTickCounter     = 0;
+    private boolean hasDisconnected  = false;
+    private int     warnTickCounter  = 0;
+    private int     graceTickCounter = 0;
 
     public EndSafe() {
         super(HuntingUtilities.CATEGORY, "EndSafe", "Protects you from the void by warning or disconnecting at low Y levels.");
@@ -129,54 +207,97 @@ public class EndSafe extends Module {
 
     @Override
     public void onActivate() {
-        hasDisconnected = false;
-        warnTickCounter = 0;
+        hasDisconnected  = false;
+        warnTickCounter  = 0;
+        graceTickCounter = 0;
     }
 
     @Override
     public void onDeactivate() {
-        hasDisconnected = false;
-        warnTickCounter = 0;
+        hasDisconnected  = false;
+        warnTickCounter  = 0;
+        graceTickCounter = 0;
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
 
-        // Dimension check
-        if (endOnly.get() && !mc.world.getDimensionEntry().matchesKey(DimensionTypes.THE_END)) {
-            warnTickCounter = 0;
-            return;
+        boolean inEnd      = mc.world.getDimensionEntry().matchesKey(DimensionTypes.THE_END);
+        boolean inOverworld = mc.world.getDimensionEntry().matchesKey(DimensionTypes.OVERWORLD);
+
+        // Dimension gate — ignore Nether always; also ignore Overworld if end-only is on.
+        if (!inEnd && !inOverworld) { resetCounters(); return; }
+        if (endOnly.get() && !inEnd) { resetCounters(); return; }
+
+        // Resolve the effective thresholds for this dimension.
+        int effectiveWarnY;
+        int effectiveDisconnectY;
+
+        if (perDimensionThresholds.get() && !endOnly.get()) {
+            if (inEnd) {
+                effectiveWarnY       = endWarnY.get();
+                effectiveDisconnectY = endDisconnectY.get();
+            } else {
+                // Overworld
+                effectiveWarnY       = overworldWarnY.get();
+                effectiveDisconnectY = overworldDisconnectY.get();
+            }
+        } else if (endOnly.get()) {
+            // end-only mode: always use the End threshold group
+            effectiveWarnY       = endWarnY.get();
+            effectiveDisconnectY = endDisconnectY.get();
+        } else {
+            // Single shared thresholds
+            effectiveWarnY       = warnY.get();
+            effectiveDisconnectY = disconnectY.get();
         }
 
         ClientPlayerEntity player = mc.player;
         double playerY = player.getY();
 
-        // Sanity check: warn Y should be above disconnect Y
-        if (warnEnabled.get() && disconnectEnabled.get() && warnY.get() <= disconnectY.get()) {
-            warning("⚠ EndSafe config issue: warn-y-level (" + warnY.get()
-                + ") is not above disconnect-y-level (" + disconnectY.get()
+        // Sanity check
+        if (warnEnabled.get() && disconnectEnabled.get() && effectiveWarnY <= effectiveDisconnectY) {
+            warning("⚠ EndSafe config issue: warn-y-level (" + effectiveWarnY
+                + ") is not above disconnect-y-level (" + effectiveDisconnectY
                 + "). You may not receive warnings before being disconnected!");
+        }
+
+        // Determine whether the player is currently in danger (below either threshold).
+        boolean belowDisconnect = disconnectEnabled.get() && playerY < effectiveDisconnectY;
+        boolean belowWarn       = warnEnabled.get()       && playerY < effectiveWarnY;
+        boolean inDanger        = belowDisconnect || belowWarn;
+
+        // -----------------------------------------------------------------
+        // Grace period
+        // -----------------------------------------------------------------
+        if (inDanger && graceEnabled.get()) {
+            graceTickCounter++;
+            if (graceTickCounter < graceTicks.get()) {
+                // Still within grace window — don't act yet, but don't reset warn
+                // counter either so interval timing stays accurate once grace expires.
+                return;
+            }
+            // Grace period expired — fall through to act.
+        } else if (!inDanger) {
+            graceTickCounter = 0;
         }
 
         // -----------------------------------------------------------------
         // Auto Disconnect (highest priority)
         // -----------------------------------------------------------------
-        if (disconnectEnabled.get() && playerY < disconnectY.get()) {
+        if (belowDisconnect) {
             if (!hasDisconnected) {
                 hasDisconnected = true;
 
-                // Prominent on-screen title
                 mc.inGameHud.setTitle(Text.literal("§c§lENDSAFE DISCONNECT"));
                 mc.inGameHud.setSubtitle(Text.literal(
-                    "§eY: " + String.format("%.1f", playerY) + " §7is below §c" + disconnectY.get()
+                    "§eY: " + String.format("%.1f", playerY) + " §7is below §c" + effectiveDisconnectY
                 ));
 
-                // Chat log
                 info("§cDisconnected — Y §e" + String.format("%.1f", playerY)
-                    + " §cis below safe threshold §e(" + disconnectY.get() + ")§c.");
+                    + " §cis below safe threshold §e(" + effectiveDisconnectY + ")§c.");
 
-                // Disconnect
                 mc.world.disconnect();
                 mc.disconnect();
             }
@@ -188,27 +309,23 @@ public class EndSafe extends Module {
         // -----------------------------------------------------------------
         // Warning Ping
         // -----------------------------------------------------------------
-        if (warnEnabled.get() && playerY < warnY.get()) {
+        if (belowWarn) {
             warnTickCounter++;
 
             int interval = warnInterval.get();
-            // interval=0 means fire only once (on tick 1); otherwise repeat every N ticks
             boolean shouldWarn = (interval == 0)
                 ? (warnTickCounter == 1)
                 : (warnTickCounter % interval == 1);
 
             if (shouldWarn) {
-                // On-screen title overlay
                 mc.inGameHud.setTitle(Text.literal("§e§l⚠ VOID WARNING"));
                 mc.inGameHud.setSubtitle(Text.literal(
-                    "§fY: §c" + String.format("%.1f", playerY) + "  §f| Safe above: §a" + warnY.get()
+                    "§fY: §c" + String.format("%.1f", playerY) + "  §f| Safe above: §a" + effectiveWarnY
                 ));
 
-                // Chat warning
-                warning("⚠ EndSafe: Below Y §c" + warnY.get()
+                warning("⚠ EndSafe: Below Y §c" + effectiveWarnY
                     + "§r! Current Y: §c" + String.format("%.1f", playerY));
 
-                // Sound ping
                 player.playSound(
                     warnSound.get().getSoundEvent(),
                     warnVolume.get().floatValue(),
@@ -218,5 +335,12 @@ public class EndSafe extends Module {
         } else {
             warnTickCounter = 0;
         }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void resetCounters() {
+        warnTickCounter  = 0;
+        graceTickCounter = 0;
     }
 }
