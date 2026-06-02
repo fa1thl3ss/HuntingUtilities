@@ -28,12 +28,14 @@ Modules List;
 - Tunnelers
 
 Hud List;
+- Dura Panel
 - Info Assistant
 - Loot Lens
-- Pearl Counter
+- Neighbourhood Watch
 - Portal Tracker
 - Position
 - Rocket Pilot
+- Server Report
 - Statistics Information
 - Time Throttle
 
