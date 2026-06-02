@@ -293,6 +293,11 @@ public class PearlPulse extends Module {
         return range.get();
     }
 
+    /** Returns the set of Ender Pearl IDs currently detected over bubble columns. Used by NeighbourhoodWatchHUD. */
+    public Set<Integer> getSeenPearlIds() {
+        return seenPearlIds;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Lifecycle
     // ═══════════════════════════════════════════════════════════════════════════

@@ -208,7 +208,7 @@ public class NeighbourhoodWatch extends Module {
     private final Setting<List<String>> friends = sgFriends.add(new StringListSetting.Builder()
         .name("friends").description("Players treated as friends. Case-insensitive.")
         .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
-        .visible(() -> isFriendCategoryVisible())
+        .visible(this::isFriendCategoryVisible)
         .build()
     );
 
@@ -224,7 +224,7 @@ public class NeighbourhoodWatch extends Module {
     private final Setting<List<String>> enemies = sgFriends.add(new StringListSetting.Builder()
         .name("enemies").description("Players treated as enemies. Case-insensitive.")
         .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
-        .visible(() -> isEnemyCategoryVisible())
+        .visible(this::isEnemyCategoryVisible)
         .build()
     );
 
@@ -240,7 +240,7 @@ public class NeighbourhoodWatch extends Module {
     private final Setting<List<String>> proxies = sgFriends.add(new StringListSetting.Builder()
         .name("proxies").description("Players treated as proxies. Case-insensitive.")
         .defaultValue(List.of()).onChanged(l -> updateFriendEnemySets())
-        .visible(() -> isProxyCategoryVisible())
+        .visible(this::isProxyCategoryVisible)
         .build()
     );
 
@@ -325,19 +325,13 @@ public class NeighbourhoodWatch extends Module {
 
     @Override
     public void onDeactivate() {
-        if (mc.world != null) {
-            for (Entity entity : mc.world.getEntities()) {
-                if (activelyOutlined.contains(entity.getId())) {
-                    entity.setGlowing(false);
-                }
-            }
-        }
-        activelyOutlined.clear();
+        clearAllOutlines();
         resetState();
     }
 
     @EventHandler
     private void onGameJoined(GameJoinedEvent event) {
+        clearAllOutlines();
         resetState();
     }
 
@@ -355,7 +349,7 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Outline shader management
+    // Outline management
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void tickOutlineShader() {
@@ -389,14 +383,18 @@ public class NeighbourhoodWatch extends Module {
             };
 
             player.setGlowing(true);
-            setOutlineColor(player, color);
+            applyOutlineColor(player, color);
             newlyActive.add(player.getId());
         }
 
+        // Remove glow from players no longer tracked
         for (int id : activelyOutlined) {
             if (!newlyActive.contains(id)) {
                 Entity e = mc.world.getEntityById(id);
-                if (e != null) e.setGlowing(false);
+                if (e != null) {
+                    e.setGlowing(false);
+                    removeOutlineColor(e);
+                }
             }
         }
 
@@ -463,7 +461,7 @@ public class NeighbourhoodWatch extends Module {
             parseMessageForAutoIgnore(event.getMessage().getString());
         } else {
             String censored = censorMessage(event.getMessage().getString());
-            if (censored != null) event.setMessage(net.minecraft.text.Text.literal(censored));
+            if (censored != null) event.setMessage(Text.literal(censored));
         }
     }
 
@@ -476,8 +474,8 @@ public class NeighbourhoodWatch extends Module {
 
         for (PlayerEntity player : mc.world.getPlayers()) {
             if (player == mc.player || player.isCreative() || player.isSpectator()) continue;
-            if (ignoreFriendsOnDisconnect.get() && isFriend(player.getName().getString())) continue;
-            if (ignoreProxiesOnDisconnect.get() && isProxy(player.getName().getString())) continue;
+            if (ignoreFriendsOnDisconnect.get()  && isFriend(player.getName().getString())) continue;
+            if (ignoreProxiesOnDisconnect.get()  && isProxy(player.getName().getString()))  continue;
             if (mc.player.distanceTo(player) <= playerDetectionRange.get()) {
                 disconnect("[NeighbourhoodWatch] Player detected: " + player.getName().getString());
                 return true;
@@ -493,13 +491,23 @@ public class NeighbourhoodWatch extends Module {
             if (player == mc.player || player.isSpectator()) continue;
             if (mc.player.distanceTo(player) > trackRange.get()) continue;
 
+            String       name   = player.getName().getString();
+            PlayerStatus status = getPlayerStatusPublic(name);
+
+            boolean shouldNotify = trackFilter.get() == TabFilter.All || switch (status) {
+                case Friend -> trackFilter.get() == TabFilter.Friends;
+                case Enemy  -> trackFilter.get() == TabFilter.Enemies;
+                case Proxy  -> trackFilter.get() == TabFilter.Proxies;
+                case Other  -> trackFilter.get() == TabFilter.Others;
+            };
+            if (!shouldNotify) continue;
+
             if (notifiedPlayers.add(player.getId())) {
                 if (notifyChat.get()) {
-                    String playerName = player.getName().getString();
-                    String status     = getPlayerStatusPublic(playerName).name().toLowerCase();
-                    String msg        = customMessage.get()
-                        .replace("{player}", playerName)
-                        .replace("{status}", status);
+                    String statusStr = status.name().toLowerCase();
+                    String msg = customMessage.get()
+                        .replace("{player}", name)
+                        .replace("{status}", statusStr);
                     info(msg);
                 }
                 if (playSound.get()) {
@@ -507,6 +515,7 @@ public class NeighbourhoodWatch extends Module {
                 }
             }
         }
+        // Remove stale IDs for players who have left the world
         notifiedPlayers.removeIf(id -> mc.world.getEntityById(id) == null);
     }
 
@@ -517,13 +526,11 @@ public class NeighbourhoodWatch extends Module {
     private void handleTabListChange(String playerName, String action) {
         PlayerStatus status = getPlayerStatusPublic(playerName);
 
-        // Check event type filter (Join / Leave / Both)
         if (tabEvent.get() != TabEvent.Both) {
             TabEvent eventType = action.equals("joined") ? TabEvent.Join : TabEvent.Leave;
             if (tabEvent.get() != eventType) return;
         }
 
-        // Check player category filter
         boolean shouldNotify = tabFilter.get() == TabFilter.All || switch (status) {
             case Friend -> tabFilter.get() == TabFilter.Friends;
             case Enemy  -> tabFilter.get() == TabFilter.Enemies;
@@ -551,7 +558,7 @@ public class NeighbourhoodWatch extends Module {
         int    baseAlpha = glowBaseAlpha.get();
 
         for (int i = layers; i >= 1; i--) {
-            double expansion = spread * i;
+            double expansion  = spread * i;
             double t          = (double)(i - 1) / layers;
             int    layerAlpha = Math.max(4, (int)(baseAlpha * (1.0 - t * t)));
             event.renderer.box(
@@ -567,7 +574,6 @@ public class NeighbourhoodWatch extends Module {
     // Chat Parsing — Message Control
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Extracts sender + body from a raw chat string. Returns null if not parseable. */
     private String[] parseSenderAndBody(String rawMessage) {
         if (rawMessage.startsWith("<")) {
             int close = rawMessage.indexOf('>');
@@ -582,10 +588,9 @@ public class NeighbourhoodWatch extends Module {
         return new String[]{ name.trim(), rawMessage.substring(colon + 1).trim() };
     }
 
-    /** Returns the first matched keyword in body, or null if none match. */
     private String findKeyword(String body) {
-        boolean cs = ignoreCaseSensitive.get();
-        String search = cs ? body : body.toLowerCase();
+        boolean cs     = ignoreCaseSensitive.get();
+        String  search = cs ? body : body.toLowerCase();
         for (String kw : ignoreKeywords.get()) {
             if (kw.isBlank()) continue;
             if (search.contains(cs ? kw : kw.toLowerCase())) return kw;
@@ -593,7 +598,6 @@ public class NeighbourhoodWatch extends Module {
         return null;
     }
 
-    /** Censors every matched keyword in rawMessage with Xs. Returns null if nothing matched. */
     private String censorMessage(String rawMessage) {
         boolean cs      = ignoreCaseSensitive.get();
         String  working = rawMessage;
@@ -601,7 +605,7 @@ public class NeighbourhoodWatch extends Module {
         for (String kw : ignoreKeywords.get()) {
             if (kw.isBlank()) continue;
             String replacement = "X".repeat(kw.length());
-            String replaced = cs
+            String replaced    = cs
                 ? working.replace(kw, replacement)
                 : working.replaceAll("(?i)" + java.util.regex.Pattern.quote(kw), replacement);
             if (!replaced.equals(working)) { working = replaced; changed = true; }
@@ -626,27 +630,79 @@ public class NeighbourhoodWatch extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Outline Color Injection
+    //
+    // In Minecraft 1.21.4, net.minecraft.scoreboard.ScoreboardTeam was renamed
+    // to net.minecraft.scoreboard.Team (the old Team interface was removed).
+    // We call setColor() directly on the Team reference — no instanceof cast needed.
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private void setOutlineColor(Entity entity, SettingColor color) {
-        try {
-            var field = meteordevelopment.meteorclient.utils.render.RenderUtils.class
-                .getDeclaredField("entityOutlineColors");
-            field.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            java.util.Map<Integer, Color> map =
-                (java.util.Map<Integer, Color>) field.get(null);
-            if (map != null) {
-                map.put(entity.getId(), new Color(color.r, color.g, color.b, color.a));
+    /**
+     * Assigns the entity to a temporary scoreboard team that carries the desired outline color.
+     * FIX: Removed the broken "instanceof ScoreboardTeam" pattern — in 1.21.4 the concrete
+     * class IS net.minecraft.scoreboard.Team, so we call setColor() on the Team reference directly.
+     */
+    private void applyOutlineColor(PlayerEntity player, SettingColor color) {
+        if (mc.world == null) return;
+        int rgb = (color.r << 16) | (color.g << 8) | color.b;
+        String teamName = "nw_" + Integer.toHexString(rgb);
+
+        net.minecraft.scoreboard.Scoreboard scoreboard = mc.world.getScoreboard();
+        net.minecraft.scoreboard.Team team = scoreboard.getTeam(teamName);
+        if (team == null) {
+            scoreboard.addTeam(teamName);
+            team = scoreboard.getTeam(teamName);
+            // In 1.21.4, Team is the concrete class (ScoreboardTeam was renamed to Team).
+            // setColor() is available directly on the Team reference — no cast required.
+            if (team != null) {
+                team.setColor(net.minecraft.util.Formatting.byColorIndex(closestFormattingColor(color)));
             }
-        } catch (NoSuchFieldException | IllegalAccessException ignored) {}
+        }
+        if (team != null) {
+            scoreboard.addScoreHolderToTeam(player.getName().getString(), team);
+        }
+    }
+
+    /** Removes the entity from any nw_ team we added. */
+    private void removeOutlineColor(Entity entity) {
+        if (mc.world == null) return;
+        net.minecraft.scoreboard.Scoreboard scoreboard = mc.world.getScoreboard();
+        net.minecraft.scoreboard.Team team = scoreboard.getTeam(entity.getName().getString());
+        if (team != null && team.getName().startsWith("nw_")) {
+            scoreboard.removeScoreHolderFromTeam(entity.getName().getString(), team);
+        }
+    }
+
+    /**
+     * Maps an RGBA color to the nearest Minecraft Formatting color index (0–15).
+     * This is the value stored in Team and read back by the outline shader.
+     */
+    private int closestFormattingColor(SettingColor c) {
+        // Minecraft's 16 color palette (R,G,B) indexed by Formatting.colorIndex
+        int[][] palette = {
+            {0,0,0},{0,0,170},{0,170,0},{0,170,170},
+            {170,0,0},{170,0,170},{255,170,0},{170,170,170},
+            {85,85,85},{85,85,255},{85,255,85},{85,255,255},
+            {255,85,85},{255,85,255},{255,255,85},{255,255,255}
+        };
+        int best = 15, bestDist = Integer.MAX_VALUE;
+        for (int i = 0; i < palette.length; i++) {
+            int dr = c.r - palette[i][0];
+            int dg = c.g - palette[i][1];
+            int db = c.b - palette[i][2];
+            int dist = dr*dr + dg*dg + db*db;
+            if (dist < bestDist) { bestDist = dist; best = i; }
+        }
+        return best;
     }
 
     private void clearAllOutlines() {
         if (mc.world != null) {
             for (int id : activelyOutlined) {
                 Entity e = mc.world.getEntityById(id);
-                if (e != null) e.setGlowing(false);
+                if (e != null) {
+                    e.setGlowing(false);
+                    removeOutlineColor(e);
+                }
             }
         }
         activelyOutlined.clear();
@@ -660,6 +716,8 @@ public class NeighbourhoodWatch extends Module {
         notifiedPlayers.clear();
         ignoredThisSession.clear();
         playersInTab.clear();
+        // Note: activelyOutlined is cleared separately via clearAllOutlines()
+        // so that setGlowing(false) is called before the IDs are lost.
     }
 
     private void updateFriendEnemySets() {
@@ -688,22 +746,22 @@ public class NeighbourhoodWatch extends Module {
 
     private boolean isFriendCategoryVisible() {
         return trackFilter.get() == TabFilter.Friends || trackFilter.get() == TabFilter.All
-            || tabFilter.get() == TabFilter.Friends   || tabFilter.get() == TabFilter.All;
+            || tabFilter.get()   == TabFilter.Friends || tabFilter.get()   == TabFilter.All;
     }
 
     private boolean isEnemyCategoryVisible() {
         return trackFilter.get() == TabFilter.Enemies || trackFilter.get() == TabFilter.All
-            || tabFilter.get() == TabFilter.Enemies   || tabFilter.get() == TabFilter.All;
+            || tabFilter.get()   == TabFilter.Enemies || tabFilter.get()   == TabFilter.All;
     }
 
     private boolean isProxyCategoryVisible() {
         return trackFilter.get() == TabFilter.Proxies || trackFilter.get() == TabFilter.All
-            || tabFilter.get() == TabFilter.Proxies   || tabFilter.get() == TabFilter.All;
+            || tabFilter.get()   == TabFilter.Proxies || tabFilter.get()   == TabFilter.All;
     }
 
     private boolean isOtherCategoryVisible() {
         return trackFilter.get() == TabFilter.Others || trackFilter.get() == TabFilter.All
-            || tabFilter.get() == TabFilter.Others    || tabFilter.get() == TabFilter.All;
+            || tabFilter.get()   == TabFilter.Others  || tabFilter.get()   == TabFilter.All;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -719,5 +777,10 @@ public class NeighbourhoodWatch extends Module {
         if (isEnemy(name))  return PlayerStatus.Enemy;
         if (isProxy(name))  return PlayerStatus.Proxy;
         return PlayerStatus.Other;
+    }
+
+    /** Exposes whether the disconnect-on-player safety feature is armed. Used by the HUD. */
+    public boolean isDisconnectOnPlayerArmed() {
+        return disconnectOnPlayer.get();
     }
 }

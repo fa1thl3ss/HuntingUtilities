@@ -5,12 +5,14 @@ import org.slf4j.LoggerFactory;
 
 import com.example.addon.hud.InfoAssistantHud;
 import com.example.addon.hud.LootLensHud;
-import com.example.addon.hud.PearlCounterHud;
 import com.example.addon.hud.PortalTrackerHud;
 import com.example.addon.hud.PositionHud;
 import com.example.addon.hud.RocketPilotHud;
 import com.example.addon.hud.StatisticsInformation;
 import com.example.addon.hud.TimeThrottleHUD;
+import com.example.addon.hud.NeighbourhoodWatchHUD;
+import com.example.addon.hud.DuraPanelHUD;
+import com.example.addon.hud.ServerReportHUD;
 import com.example.addon.modules.DungeonAssistant;
 import com.example.addon.modules.ElytraAssistant;
 import com.example.addon.modules.EndSafe;
@@ -79,8 +81,10 @@ public class HuntingUtilities extends MeteorAddon {
         Hud.get().register(PositionHud.INFO);
         Hud.get().register(RocketPilotHud.INFO);
         Hud.get().register(InfoAssistantHud.INFO);
-        Hud.get().register(PearlCounterHud.INFO);
         Hud.get().register(TimeThrottleHUD.INFO);
+        Hud.get().register(NeighbourhoodWatchHUD.INFO);
+        Hud.get().register(DuraPanelHUD.INFO);
+        Hud.get().register(ServerReportHUD.INFO);
     }
 
     @Override

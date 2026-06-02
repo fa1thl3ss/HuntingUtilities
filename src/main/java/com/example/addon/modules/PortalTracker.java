@@ -27,6 +27,7 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.RespawnAnchorBlock;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.EndGatewayBlockEntity;
 import net.minecraft.block.entity.EndPortalBlockEntity;
@@ -75,6 +76,7 @@ public class PortalTracker extends Module {
     private final SettingGroup sgGeneral       = settings.getDefaultGroup();
     private final SettingGroup sgNetherPortals = settings.createGroup("Nether Portals");
     private final SettingGroup sgEndDimension  = settings.createGroup("End Dimension");
+    private final SettingGroup sgAnchors       = settings.createGroup("Respawn Anchors");
     private final SettingGroup sgRender        = settings.createGroup("Render");
     private final SettingGroup sgGlow          = settings.createGroup("Glow");
     private final SettingGroup sgSpectral      = settings.createGroup("Spectral");
@@ -137,6 +139,30 @@ public class PortalTracker extends Module {
     private final Setting<SettingColor> endGatewayColor = sgEndDimension.add(new ColorSetting.Builder()
         .name("end-gateway-color").defaultValue(new SettingColor(255, 0, 255, 255))
         .visible(scanEndGateways::get).build());
+
+    // ── Respawn Anchors ────────────────────────────────────────────
+    private final Setting<Boolean> scanAnchors = sgAnchors.add(new BoolSetting.Builder()
+        .name("scan-anchors")
+        .description("Scan Respawn Anchors. Charged = has glowstone (1-4 charges). Uncharged = untouched or depleted (0 charges).")
+        .defaultValue(true).build());
+
+    private final Setting<SettingColor> anchorChargedColor = sgAnchors.add(new ColorSetting.Builder()
+        .name("color-charged")
+        .description("Color for anchors with at least 1 charge — someone has used glowstone on this.")
+        .defaultValue(new SettingColor(255, 200, 0, 255))
+        .visible(scanAnchors::get).build());
+
+    private final Setting<SettingColor> anchorUnchargedColor = sgAnchors.add(new ColorSetting.Builder()
+        .name("color-uncharged")
+        .description("Color for anchors with 0 charges — untouched or fully depleted.")
+        .defaultValue(new SettingColor(100, 100, 120, 255))
+        .visible(scanAnchors::get).build());
+
+    private final Setting<Boolean> onlyShowChargedAnchors = sgAnchors.add(new BoolSetting.Builder()
+        .name("only-charged")
+        .description("Only highlight anchors that have at least 1 charge.")
+        .defaultValue(false)
+        .visible(scanAnchors::get).build());
 
     // ── Render ─────────────────────────────────────────────────────
     private final Setting<ShapeMode> shapeMode = sgRender.add(new EnumSetting.Builder<ShapeMode>()
@@ -264,6 +290,9 @@ public class PortalTracker extends Module {
     private final Map<BlockPos, PortalStructure> portalStructureMap = new ConcurrentHashMap<>();
     private volatile boolean                     portalsDirty       = false;
 
+    // Anchor charge state: true = charged (>0), false = uncharged (0)
+    private final Map<BlockPos, Boolean> anchorChargeMap = new ConcurrentHashMap<>();
+
     private final Set<ChunkPos> scannedChunks = new HashSet<>();
     private final Set<ChunkPos> dirtyChunks   = new HashSet<>();
 
@@ -280,12 +309,12 @@ public class PortalTracker extends Module {
     private int      structureTimer          = 0;
     private int      cleanupTimer            = 0;
 
-    private final Map<BlockPos, Boolean> sizeConfirmedPortals = new ConcurrentHashMap<>();
-    private final Set<BlockPos>          pendingSizeRecheck   = ConcurrentHashMap.newKeySet();
-    private final Map<String, Boolean>   crossDimensionSizeCache = new ConcurrentHashMap<>();
+    private final Map<BlockPos, Boolean> sizeConfirmedPortals    = new ConcurrentHashMap<>();
+    private final Set<BlockPos>          pendingSizeRecheck       = ConcurrentHashMap.newKeySet();
+    private final Map<String, Boolean>   crossDimensionSizeCache  = new ConcurrentHashMap<>();
 
     public PortalTracker() {
-        super(HuntingUtilities.CATEGORY, "portal-tracker", "Automatically tracks and highlights portals.");
+        super(HuntingUtilities.CATEGORY, "portal-tracker", "Automatically tracks and highlights portals and respawn anchors.");
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────
@@ -314,6 +343,7 @@ public class PortalTracker extends Module {
         notifiedStructures.clear(); messageCooldowns.clear();
         scannedChunks.clear(); dirtyChunks.clear();
         sizeConfirmedPortals.clear(); pendingSizeRecheck.clear(); crossDimensionSizeCache.clear();
+        anchorChargeMap.clear();
         portalsDirty = false; manuallyActivated = false; sessionStartTime = 0;
         structureTimer = 0; cleanupTimer = 0;
     }
@@ -362,10 +392,11 @@ public class PortalTracker extends Module {
             portals.clear(); createdPortals.clear(); portalStructureMap.clear();
             notifiedStructures.clear(); scannedChunks.clear(); dirtyChunks.clear();
             sizeConfirmedPortals.clear(); pendingSizeRecheck.clear();
+            anchorChargeMap.clear();
             portalsDirty = false;
 
             boolean notify =
-                (currDim.equals("minecraft:the_nether") && scanNetherPortals.get()) ||
+                (currDim.equals("minecraft:the_nether") && (scanNetherPortals.get() || scanAnchors.get())) ||
                 (currDim.equals("minecraft:overworld")   && scanNetherPortals.get()) ||
                 (currDim.equals("minecraft:the_end")     && (scanEndPortals.get() || scanEndGateways.get()));
             if (notify) sendMessage("§7Entered " + getDimensionName(currDim) + " — scanning started");
@@ -440,9 +471,28 @@ public class PortalTracker extends Module {
             if (section == null || section.isEmpty()) continue;
             int sectionMinY = (chunk.getBottomSectionCoord() + i) * 16;
             for (int x = 0; x < 16; x++) for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) {
-                PortalType type = classifyBlock(section.getBlockState(x, y, z).getBlock());
-                if (type == null) continue;
+                var blockState = section.getBlockState(x, y, z);
                 BlockPos pos = new BlockPos((chunk.getPos().x << 4)+x, sectionMinY+y, (chunk.getPos().z << 4)+z);
+
+                // ── Respawn Anchor: read charge from block state ──────────────
+                if (scanAnchors.get() && blockState.isOf(Blocks.RESPAWN_ANCHOR)) {
+                    int charges = blockState.get(RespawnAnchorBlock.CHARGES);
+                    boolean charged = charges > 0;
+                    if (!portals.containsKey(pos)) {
+                        portals.put(pos, PortalType.RESPAWN_ANCHOR);
+                        anchorChargeMap.put(pos, charged);
+                        portalsDirty = true;
+                        processNewDiscovery(pos, PortalType.RESPAWN_ANCHOR, dimId);
+                    } else {
+                        // Update charge state in case it changed
+                        Boolean prev = anchorChargeMap.put(pos, charged);
+                        if (prev == null || prev != charged) portalsDirty = true;
+                    }
+                    continue;
+                }
+
+                PortalType type = classifyBlock(blockState.getBlock());
+                if (type == null) continue;
                 if (!portals.containsKey(pos)) {
                     portals.put(pos, type); portalsDirty = true;
                     processNewDiscovery(pos, type, dimId);
@@ -463,7 +513,10 @@ public class PortalTracker extends Module {
     }
 
     private boolean isTrackedPortalBlock(Block block) {
-        return block == Blocks.NETHER_PORTAL || block == Blocks.END_PORTAL || block == Blocks.END_GATEWAY;
+        return block == Blocks.NETHER_PORTAL
+            || block == Blocks.END_PORTAL
+            || block == Blocks.END_GATEWAY
+            || block == Blocks.RESPAWN_ANCHOR;
     }
 
     // ── Discovery ──────────────────────────────────────────────────
@@ -551,6 +604,20 @@ public class PortalTracker extends Module {
             if (visited.contains(startPos)) continue;
             PortalType type = portals.get(startPos);
             if (type == null) continue;
+
+            // ── Respawn Anchors are single-block: no flood fill needed ────────
+            if (type == PortalType.RESPAWN_ANCHOR) {
+                visited.add(startPos);
+                activeAnchors.add(startPos);
+
+                boolean charged = anchorChargeMap.getOrDefault(startPos, false);
+                if (onlyShowChargedAnchors.get() && !charged) continue;
+
+                Box structureBox = new Box(startPos).expand(0.02);
+                portalStructureMap.put(startPos,
+                    new PortalStructure(structureBox, Set.of(startPos), false, SizeState.EXIT, type));
+                continue;
+            }
 
             Set<BlockPos>   component    = new HashSet<>();
             Queue<BlockPos> queue        = new LinkedList<>();
@@ -641,6 +708,7 @@ public class PortalTracker extends Module {
             portalsDirty = true;
             sizeConfirmedPortals.keySet().removeIf(anchor -> !portalStructureMap.containsKey(anchor));
             pendingSizeRecheck.removeIf(anchor -> !portalStructureMap.containsKey(anchor));
+            anchorChargeMap.keySet().removeIf(pos -> playerPos.getSquaredDistance(pos) > distSq);
         }
     }
 
@@ -672,6 +740,14 @@ public class PortalTracker extends Module {
         boolean isObsidian  = event.newState.isOf(Blocks.OBSIDIAN);
         boolean obsidianChanged = wasObsidian != isObsidian;
 
+        // ── Anchor charge change (e.g. glowstone added or explosion depleted) ──
+        if (event.oldState.isOf(Blocks.RESPAWN_ANCHOR) && event.newState.isOf(Blocks.RESPAWN_ANCHOR)) {
+            int newCharges = event.newState.get(RespawnAnchorBlock.CHARGES);
+            Boolean prev = anchorChargeMap.put(event.pos, newCharges > 0);
+            if (prev == null || prev != (newCharges > 0)) portalsDirty = true;
+            return;
+        }
+
         if (!wasPortal && !isPortal && !obsidianChanged) return;
 
         ChunkPos cp = new ChunkPos(event.pos);
@@ -700,6 +776,7 @@ public class PortalTracker extends Module {
 
         if (!isPortal) {
             portals.remove(event.pos); portalsDirty = true;
+            anchorChargeMap.remove(event.pos);
             sizeConfirmedPortals.keySet().removeIf(anchor -> !portalStructureMap.containsKey(anchor));
             pendingSizeRecheck.remove(event.pos);
         }
@@ -729,7 +806,7 @@ public class PortalTracker extends Module {
         for (PortalStructure structure : snapshot) {
             if (structure.type == PortalType.NETHER && !structure.isClassified()) continue;
 
-            SettingColor color = getSettingColor(structure.type, structure.isFullSize());
+            SettingColor color = getStructureColor(structure);
             if (color == null) continue;
 
             if (highlightStyle.get() == HighlightStyle.SPECTRAL) {
@@ -923,12 +1000,28 @@ public class PortalTracker extends Module {
         return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
     }
 
+    private SettingColor getStructureColor(PortalStructure structure) {
+        if (structure.type == PortalType.RESPAWN_ANCHOR) {
+            BlockPos pos = structure.portalBlocks.iterator().next();
+            boolean charged = anchorChargeMap.getOrDefault(pos, false);
+            if (dynamicColors.get()) {
+                float hue = charged ? 0.13f : 0.65f;
+                hue = (hue + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
+                int rgb = java.awt.Color.HSBtoRGB(hue, 0.8f, 1.0f);
+                return new SettingColor((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, 255);
+            }
+            return charged ? anchorChargedColor.get() : anchorUnchargedColor.get();
+        }
+        return getSettingColor(structure.type, structure.isFullSize());
+    }
+
     private SettingColor getSettingColor(PortalType type, boolean isFullSize) {
         if (dynamicColors.get()) {
             float baseHue = switch (type) {
                 case NETHER      -> isFullSize ? 0.78f : 0.08f;
                 case END_PORTAL  -> 0.333f;
                 case END_GATEWAY -> 0.667f;
+                default          -> 0.0f;
             };
             float hue = (baseHue + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
             int rgb = java.awt.Color.HSBtoRGB(hue, 0.8f, 1.0f);
@@ -940,6 +1033,7 @@ public class PortalTracker extends Module {
                 : netherColorFull.get();
             case END_PORTAL  -> endPortalColor.get();
             case END_GATEWAY -> endGatewayColor.get();
+            default          -> null;
         };
     }
 
@@ -963,8 +1057,9 @@ public class PortalTracker extends Module {
 
     // ── Public API ─────────────────────────────────────────────────
     public boolean isPortalGuiEnabled() { return isActive(); }
-    public int getTotalPortals()         { return portalStructureMap.size(); }
+    public int getTotalPortals()         { return (int) portalStructureMap.values().stream().filter(s -> s.type != PortalType.RESPAWN_ANCHOR).count(); }
     public int getTotalCreated()         { return totalCreated; }
+    public int getTotalAnchors()         { return (int) portalStructureMap.values().stream().filter(s -> s.type == PortalType.RESPAWN_ANCHOR).count(); }
 
     public void markChunkDirty(ChunkPos chunkPos) {
         if (chunkPos == null) return;
@@ -973,7 +1068,11 @@ public class PortalTracker extends Module {
 
     // ── Inner Types ────────────────────────────────────────────────
     private enum PortalType {
-        NETHER("Nether Portal"), END_PORTAL("End Portal"), END_GATEWAY("End Gateway");
+        NETHER("Nether Portal"),
+        END_PORTAL("End Portal"),
+        END_GATEWAY("End Gateway"),
+        RESPAWN_ANCHOR("Respawn Anchor");
+
         private final String displayName;
         PortalType(String displayName) { this.displayName = displayName; }
         public String getDisplayName()  { return displayName; }
