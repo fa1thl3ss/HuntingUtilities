@@ -30,7 +30,7 @@ public abstract class ThirdSightCameraMixin {
     }
 
     /**
-     * When free-look or BirdsEye is active, replace the yaw passed to
+     * When free-look is active, replace the yaw passed to
      * Camera#setRotation with our independent cameraYaw so vanilla's
      * camera positioning logic uses our angle from the start.
      */

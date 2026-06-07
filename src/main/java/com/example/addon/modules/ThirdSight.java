@@ -18,12 +18,6 @@ import net.minecraft.client.option.Perspective;
 
 public class ThirdSight extends Module {
 
-    /**
-     * Selects the active camera feature.
-     * Zoom is always keybind-driven and is independent of this setting.
-     */
-    public enum CameraFeature { ThirdPerson, BirdsEye }
-
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgZoom    = settings.createGroup("Zoom");
     private final SettingGroup sgATW     = settings.createGroup("Around the World");
@@ -37,16 +31,9 @@ public class ThirdSight extends Module {
         .build()
     );
 
-    public final Setting<CameraFeature> cameraFeature = sgGeneral.add(new EnumSetting.Builder<CameraFeature>()
-        .name("camera-feature")
-        .description("Active camera feature. Zoom is always keybind-driven.")
-        .defaultValue(CameraFeature.ThirdPerson)
-        .build()
-    );
-
     public final Setting<Double> distance = sgGeneral.add(new DoubleSetting.Builder()
         .name("distance")
-        .description("Camera distance from the player. In BirdsEye mode this controls how far below.")
+        .description("Camera distance from the player.")
         .defaultValue(4.0)
         .min(1.0)
         .max(30.0)
@@ -54,11 +41,20 @@ public class ThirdSight extends Module {
         .build()
     );
 
+    public final Setting<Double> transitionSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("transition-speed")
+        .description("How smoothly the camera transitions between distances and FOV. 1.0 = instant.")
+        .defaultValue(0.15)
+        .min(0.01)
+        .max(1.0)
+        .sliderRange(0.05, 0.5)
+        .build()
+    );
+
     public final Setting<Boolean> freeLook = sgGeneral.add(new BoolSetting.Builder()
         .name("free-look")
-        .description("Orbit the camera around the player without affecting movement direction. Disabled in BirdsEye mode.")
+        .description("Orbit the camera around the player without affecting movement direction.")
         .defaultValue(true)
-        .visible(() -> cameraFeature.get() == CameraFeature.ThirdPerson)
         .build()
     );
 
@@ -69,7 +65,7 @@ public class ThirdSight extends Module {
         .min(1.0)
         .max(20.0)
         .sliderRange(1.0, 20.0)
-        .visible(() -> cameraFeature.get() == CameraFeature.ThirdPerson && freeLook.get())
+        .visible(freeLook::get)
         .build()
     );
 
@@ -80,7 +76,7 @@ public class ThirdSight extends Module {
         .min(0.01)
         .max(1.0)
         .sliderRange(0.02, 0.5)
-        .visible(() -> !freeLook.get() && cameraFeature.get() == CameraFeature.ThirdPerson)
+        .visible(() -> !freeLook.get())
         .build()
     );
 
@@ -190,7 +186,7 @@ public class ThirdSight extends Module {
 
     public ThirdSight() {
         super(HuntingUtilities.CATEGORY, "third-sight",
-            "Third-person camera with configurable distance, no block clipping, free look, BirdsEye mode, and Around the World spin.");
+            "Third-person camera with configurable distance, no block clipping, free look, and Around the World spin.");
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -203,10 +199,13 @@ public class ThirdSight extends Module {
         cameraPitch = Math.max(-89.9f, Math.min(89.9f, mc.player.getPitch()));
 
         previousPerspective = mc.options.getPerspective();
+        
+        // Start at current vanilla distance to allow smooth transition in
+        currentDistance = (previousPerspective == Perspective.FIRST_PERSON) ? 0.0 : 4.0;
+
         if (previousPerspective == Perspective.FIRST_PERSON)
             mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
 
-        currentDistance = distance.get();
         isZooming               = false;
         wasZoomKeyPressed       = false;
         noDistanceActive        = false;
@@ -250,14 +249,10 @@ public class ThirdSight extends Module {
 
             // ── Zoom keybind ─────────────────────────────────────────────────
             boolean zoomPressed = zoomKey.get().isPressed();
-            if (cameraFeature.get() != CameraFeature.BirdsEye) {
-                if (zoomToggle.get()) {
-                    if (zoomPressed && !wasZoomKeyPressed) isZooming = !isZooming;
-                } else {
-                    isZooming = zoomPressed;
-                }
+            if (zoomToggle.get()) {
+                if (zoomPressed && !wasZoomKeyPressed) isZooming = !isZooming;
             } else {
-                isZooming = false;
+                isZooming = zoomPressed;
             }
             wasZoomKeyPressed = zoomPressed;
 
@@ -292,17 +287,17 @@ public class ThirdSight extends Module {
                 previousPerspective = mc.options.getPerspective();
             if (mc.options.getPerspective() != Perspective.THIRD_PERSON_BACK)
                 mc.options.setPerspective(Perspective.THIRD_PERSON_BACK);
-
-            if (cameraFeature.get() == CameraFeature.BirdsEye) {
-                cameraYaw   = mc.player.getYaw();
-                cameraPitch = 90f;
-            }
         }
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        float speed;
+        double speed = transitionSpeed.get();
+        double targetDist;
+
+        if (noDistanceActive) targetDist = 4.0; // Vanilla third person distance
+        else targetDist = isZooming ? zoomDistance.get() : distance.get();
+
         if (atwActive) {
             float delta = (float)(atwSpeed.get() * event.tickDelta);
             if (!atwClockwise.get()) delta = -delta;
@@ -314,20 +309,10 @@ public class ThirdSight extends Module {
             cameraPitch = atwLockPitch.get()
                 ? (float) atwPitch.get().doubleValue()
                 : cameraPitch;
-
-            speed = 1.0f;
-            double targetDist = isZooming ? zoomDistance.get() : distance.get();
-            currentDistance += (targetDist - currentDistance) * speed;
-            if (Math.abs(targetDist - currentDistance) < 0.01) currentDistance = targetDist;
-
         } else {
-            double targetDist = isZooming ? zoomDistance.get() : distance.get();
-            speed = 1.0f;
-
             // When free-look is off, smoothly chase the player's look direction.
             boolean shouldFollow = !freeLook.get()
-                && mc.player != null
-                && cameraFeature.get() == CameraFeature.ThirdPerson;
+                && mc.player != null;
             if (shouldFollow) {
                 float playerYaw = mc.player.getYaw();
                 float yawDiff = playerYaw - cameraYaw;
@@ -336,10 +321,10 @@ public class ThirdSight extends Module {
                 float fs = (float) followSpeed.get().doubleValue();
                 cameraYaw += yawDiff * fs;
             }
-
-            currentDistance += (targetDist - currentDistance) * speed;
-            if (Math.abs(targetDist - currentDistance) < 0.01) currentDistance = targetDist;
         }
+
+        currentDistance += (targetDist - currentDistance) * speed;
+        if (Math.abs(targetDist - currentDistance) < 0.01) currentDistance = targetDist;
 
         // FOV smoothing (first-person zoom)
         if (!atwActive) {
@@ -383,13 +368,12 @@ public class ThirdSight extends Module {
     public boolean isAtwActive() { return atwActive; }
 
     /**
-     * Called by ThirdSightMouseMixin — free look is active in ThirdPerson mode only,
-     * never in BirdsEye.
+     * Called by ThirdSightMouseMixin — free look is active when enabled and not zooming in first person.
      */
     public boolean isFreeLookActive() {
         if (!isActive()) return false;
         if (mc.options.getPerspective().isFirstPerson()) return false;
         if (noDistanceActive && !isZooming()) return false;
-        return cameraFeature.get() == CameraFeature.ThirdPerson && freeLook.get();
+        return freeLook.get();
     }
 }

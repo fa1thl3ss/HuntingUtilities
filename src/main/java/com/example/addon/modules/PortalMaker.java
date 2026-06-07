@@ -26,6 +26,7 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.LeavesBlock;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -36,6 +37,14 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
 public class PortalMaker extends Module {
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Enums
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public enum EntryMode {
+        None, Walk, Pearl
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Setting Groups
@@ -81,18 +90,26 @@ public class PortalMaker extends Module {
         .build()
     );
 
-    private final Setting<Boolean> autoEnter = sgGeneral.add(new BoolSetting.Builder()
-        .name("auto-enter")
-        .description("Automatically enter the portal after it is created.")
-        .defaultValue(true)
+    private final Setting<EntryMode> entryMode = sgGeneral.add(new EnumSetting.Builder<EntryMode>()
+        .name("entry-mode")
+        .description("How to enter the portal after it is created.")
+        .defaultValue(EntryMode.Walk)
         .build()
     );
 
-    private final Setting<Boolean> useEnderPearl = sgGeneral.add(new BoolSetting.Builder()
-        .name("use-ender-pearl")
-        .description("Throw an ender pearl into the portal instead of walking in.")
+    private final Setting<Boolean> renderBreadcrumbs = sgGeneral.add(new BoolSetting.Builder()
+        .name("render-breadcrumbs")
+        .description("Draw a trail showing the walker's path for debugging.")
         .defaultValue(false)
-        .visible(autoEnter::get)
+        .visible(() -> entryMode.get() == EntryMode.Walk)
+        .build()
+    );
+
+    private final Setting<SettingColor> breadcrumbColor = sgGeneral.add(new ColorSetting.Builder()
+        .name("breadcrumb-color")
+        .description("Color of the breadcrumb trail.")
+        .defaultValue(new SettingColor(255, 255, 255, 150))
+        .visible(() -> renderBreadcrumbs.get() && entryMode.get() == EntryMode.Walk)
         .build()
     );
 
@@ -137,6 +154,7 @@ public class PortalMaker extends Module {
     private int     tickTimer        = 0;
     private int     finishTimer      = 0;
     private boolean pearlThrown      = false;
+    private final List<Vec3d> breadcrumbs = new ArrayList<>();
 
     /** Ticks the player has been roughly stationary while walking to portal. */
     private int   stuckTicks        = 0;
@@ -165,6 +183,7 @@ public class PortalMaker extends Module {
         stuckTicks       = 0;
         lastPos          = null;
         scaffoldCooldown = 0;
+        breadcrumbs.clear();
 
         if (mc.player == null || mc.world == null) { toggle(); return; }
 
@@ -172,7 +191,7 @@ public class PortalMaker extends Module {
             int total = countItem(Items.OBSIDIAN);
             if (total > 0) warning("Obsidian is in inventory but not hotbar!");
         }
-        int obsidianCount = countItem(Items.OBSIDIAN);
+        int obsidianCount = getObsidianCount();
         if (obsidianCount < 10) {
             error("Need at least 10 obsidian (found " + obsidianCount + ")");
             toggle();
@@ -233,6 +252,7 @@ public class PortalMaker extends Module {
         tickTimer        = 0;
         stuckTicks       = 0;
         lastPos          = null;
+        breadcrumbs.clear();
         stopMovement();
     }
 
@@ -292,7 +312,7 @@ public class PortalMaker extends Module {
 
         // ── Phase 2: light / enter ─────────────────────────────────────────────
         if (isPortalLit()) {
-            if (autoEnter.get()) {
+            if (entryMode.get() != EntryMode.None) {
                 moveToPortal();
             } else {
                 if (finishTimer++ >= finishDelay.get()) {
@@ -350,11 +370,11 @@ public class PortalMaker extends Module {
     private void moveToPortal() {
         if (portalFramePositions.size() < 2 || mc.player == null || mc.world == null) return;
 
-        // ── Ender pearl fast-path ──────────────────────────────────────────────
-        if (useEnderPearl.get()) {
+        // 1. Ender pearl fast-path
+        if (entryMode.get() == EntryMode.Pearl) {
             if (!pearlThrown && selectHotbarItem(Items.ENDER_PEARL)) {
-                Vec3d target = getPortalOpeningCenter().add(0, 0.5, 0);
-                Rotations.rotate(Rotations.getYaw(target), Rotations.getPitch(target), () -> {
+                Vec3d center = getPortalOpeningCenter().add(0, 0.5, 0);
+                Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
                     mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                     mc.player.swingHand(Hand.MAIN_HAND);
                 });
@@ -363,125 +383,121 @@ public class PortalMaker extends Module {
             return;
         }
 
-        Vec3d portalCenter = getPortalOpeningCenter();
-        Vec3d playerPos    = mc.player.getPos();
+        Vec3d target = getPortalOpeningCenter();
+        Vec3d playerPos = mc.player.getPos();
 
-        // ── Fell-off guard ─────────────────────────────────────────────────────
-        if (playerPos.y < portalCenter.y - 4.0) {
+        // 2. Safety Guards
+        if (playerPos.y < target.y - 4.0) {
             error("Fell too far below the portal — stopping.");
             stopMovement();
             toggle();
             return;
         }
 
-        // ── Stuck detection ────────────────────────────────────────────────────
-        if (lastPos != null && lastPos.squaredDistanceTo(playerPos) < 0.0025) {
+        if (isPlayerInPortal()) {
+            stopMovement();
+            return;
+        }
+
+        // 3. Stuck detection
+        if (lastPos != null && lastPos.squaredDistanceTo(playerPos) < 0.001) {
             stuckTicks++;
         } else {
             stuckTicks = 0;
         }
         lastPos = playerPos;
 
-        if (stuckTicks > 100) {
-            error("Stuck trying to enter portal — stopping.");
+        boolean slippery = isSlippery(mc.world.getBlockState(mc.player.getBlockPos().down()));
+
+        // Active recovery: jump if stuck for a short while.
+        // Recover faster on ice as sliding often prevents simple walking.
+        if (stuckTicks > (slippery ? 10 : 20) && stuckTicks < 200 && mc.player.isOnGround()) {
+            mc.player.jump();
+        }
+
+        if (stuckTicks > 200) {
+            error("Stuck trying to enter portal opening — stopping.");
             stopMovement();
             toggle();
             return;
         }
 
-        // ── Horizontal vector toward the portal OPENING ───────────────────────
-        double dx      = portalCenter.x - playerPos.x;
-        double dz      = portalCenter.z - playerPos.z;
-        double hDist   = Math.sqrt(dx * dx + dz * dz);
+        // 4. Movement Logic
+        double dx = target.x - playerPos.x;
+        double dz = target.z - playerPos.z;
+        double hDist = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
 
-        float targetYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-        Rotations.rotate(targetYaw, mc.player.getPitch());
+        stopMovement(); // Reset keys for clean state
 
-        float   yawDiff = MathHelper.wrapDegrees(targetYaw - mc.player.getYaw());
-        boolean aligned = Math.abs(yawDiff) < 30f;
+        if (hDist > 0.05) {
+            Direction dir = directionFromVector(dx, dz);
+            BlockPos playerFeet = mc.player.getBlockPos();
+            BlockPos footPos = playerFeet.offset(dir);
 
-        // ── Already inside portal blocks? ─────────────────────────────────────
-        if (isPlayerInPortal()) {
-            stopMovement();
-            return;
-        }
+            boolean footBlocked = isHardObstacle(footPos);
+            boolean headBlocked = isHardObstacle(footPos.up());
+            boolean gapAhead = !footBlocked && !mc.world.getBlockState(footPos.down()).isSolidBlock(mc.world, footPos.down())
+                               && !mc.world.getBlockState(footPos.down()).isOf(Blocks.NETHER_PORTAL);
 
-        // ── Close enough — gentle nudge forward ───────────────────────────────
-        if (hDist < 0.6) {
-            mc.options.sprintKey.setPressed(false);
-            mc.options.forwardKey.setPressed(true);
-            mc.options.backKey.setPressed(false);
-            mc.options.leftKey.setPressed(false);
-            mc.options.rightKey.setPressed(false);
-            mc.options.sneakKey.setPressed(false);
-            return;
-        }
+            if (gapAhead && mc.player.isOnGround()) {
+                if (scaffoldCooldown <= 0) {
+                    // On ice, sneaking while walking can kill all momentum or lock friction.
+                    // Briefly release sneak if stuck to regain traction.
+                    if (slippery && stuckTicks > 5) {
+                        mc.options.sneakKey.setPressed(false);
+                    } else {
+                        mc.options.sneakKey.setPressed(true);
+                    }
 
-        // ── Obstacle detection ─────────────────────────────────────────────────
-        Direction approachDir    = directionFromVector(dx, dz);
-        BlockPos  footFront      = mc.player.getBlockPos().offset(approachDir);
-        BlockPos  headFront      = footFront.up();
-        BlockPos  footFrontBelow = footFront.down();
+                    if (tryScaffoldPlace(footPos.down())) {
+                        scaffoldCooldown = placeDelay.get() + 2;
+                    }
+                }
+            } else if (footBlocked && !headBlocked && mc.player.isOnGround()) {
+                mc.player.jump();
+            }
 
-        boolean footBlocked = isHardObstacle(footFront);
-        boolean headBlocked = isHardObstacle(headFront);
-        boolean gapAhead    = !footBlocked
-                           && !mc.world.getBlockState(footFrontBelow).isSolidBlock(mc.world, footFrontBelow)
-                           && !mc.world.getBlockState(footFrontBelow).isOf(Blocks.NETHER_PORTAL);
+            // Drill through physical obstructions if stuck or completely blocked by terrain.
+            if (stuckTicks > 40 || (footBlocked && headBlocked)) {
+                for (BlockPos p : new BlockPos[]{footPos, footPos.up()}) {
+                    BlockState bs = mc.world.getBlockState(p);
+                    // Avoid breaking the portal itself or its obsidian frame.
+                    if (!bs.isAir() && !bs.isOf(Blocks.OBSIDIAN) && !bs.isOf(Blocks.NETHER_PORTAL) && bs.getHardness(mc.world, p) >= 0) {
+                        mc.interactionManager.attackBlock(p, dir.getOpposite());
+                        mc.player.swingHand(Hand.MAIN_HAND);
+                    }
+                }
+            }
 
-        // ── Break through soft obstacles in path ──────────────────────────────
-        // Soul sand and leaves slow/stop the player but aren't worth jumping or
-        // scaffolding over — just punch through them on the way.
-        if (aligned) {
-            for (BlockPos pathBlock : new BlockPos[]{ footFront, headFront }) {
-                BlockState bs = mc.world.getBlockState(pathBlock);
+            for (BlockPos p : new BlockPos[]{playerFeet, playerFeet.up(), footPos, footPos.up()}) {
+                BlockState bs = mc.world.getBlockState(p);
                 if (isSoftObstacle(bs)) {
-                    mc.interactionManager.attackBlock(pathBlock,
-                        approachDir.getOpposite());
+                    mc.interactionManager.attackBlock(p, dir.getOpposite());
                     mc.player.swingHand(Hand.MAIN_HAND);
                 }
             }
+
+            // Movement input relative to current camera yaw
+            float pYaw = MathHelper.wrapDegrees(mc.player.getYaw());
+            float diff = MathHelper.wrapDegrees(yaw - pYaw);
+
+            mc.options.forwardKey.setPressed(diff > -67.5 && diff <= 67.5);
+            mc.options.backKey.setPressed(diff > 112.5 || diff <= -112.5);
+            mc.options.leftKey.setPressed(diff > -157.5 && diff <= -22.5);
+            mc.options.rightKey.setPressed(diff > 22.5 && diff <= 157.5);
+
+            // Disable sprinting earlier on ice to avoid sliding past the portal opening.
+            mc.options.sprintKey.setPressed(hDist > (slippery ? 4.0 : 1.5) && (diff > -30 && diff <= 30));
         }
 
-        // ── Scaffold into a gap ───────────────────────────────────────────────
         if (scaffoldCooldown > 0) scaffoldCooldown--;
 
-        if (aligned && gapAhead && mc.player.isOnGround() && scaffoldCooldown == 0) {
-            mc.options.sneakKey.setPressed(true);
-            mc.options.forwardKey.setPressed(false);
-            mc.options.sprintKey.setPressed(false);
-            if (tryScaffoldPlace(footFrontBelow)) {
-                scaffoldCooldown = placeDelay.get() + 2;
-            } else {
-                mc.options.sneakKey.setPressed(false);
-                mc.options.forwardKey.setPressed(true);
+        if (renderBreadcrumbs.get()) {
+            if (breadcrumbs.isEmpty() || breadcrumbs.get(breadcrumbs.size() - 1).distanceTo(playerPos) > 0.15) {
+                breadcrumbs.add(playerPos);
             }
-            return;
         }
-        mc.options.sneakKey.setPressed(false);
-
-        // ── Jump over a 1-block wall ───────────────────────────────────────────
-        if (aligned && footBlocked && !headBlocked && mc.player.isOnGround()) {
-            mc.options.sprintKey.setPressed(false);
-            mc.options.forwardKey.setPressed(true);
-            mc.player.jump();
-            return;
-        }
-
-        // ── Stuck recovery ────────────────────────────────────────────────────
-        if (stuckTicks > 6 && mc.player.isOnGround()) {
-            mc.player.jump();
-            stuckTicks = 0;
-        }
-
-        // ── Normal walk / sprint ──────────────────────────────────────────────
-        boolean sprinting = hDist > 3.0 && aligned && !footBlocked;
-
-        mc.options.backKey.setPressed(false);
-        mc.options.leftKey.setPressed(false);
-        mc.options.rightKey.setPressed(false);
-        mc.options.sprintKey.setPressed(sprinting);
-        mc.options.forwardKey.setPressed(aligned);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -506,6 +522,14 @@ public class PortalMaker extends Module {
         }
     }
 
+    /** Returns true for blocks with low friction like ice or slime. */
+    private boolean isSlippery(BlockState state) {
+        if (state.isAir()) return false;
+        Block b = state.getBlock();
+        return b == Blocks.ICE || b == Blocks.PACKED_ICE || b == Blocks.BLUE_ICE
+            || b == Blocks.FROSTED_ICE || b == Blocks.SLIME_BLOCK;
+    }
+
     /**
      * Returns true for blocks that are genuinely impassable and worth
      * jumping/scaffolding over: solid, non-portal, non-soft blocks.
@@ -523,12 +547,12 @@ public class PortalMaker extends Module {
      * through by attacking.  The player should walk into these rather than
      * jumping or scaffolding.
      * <p>
-     * Covers: soul sand, soul soil, all overworld/nether/azalea leaf blocks.
+     * Covers: cobwebs, powder snow, and all leaf blocks.
      */
     private boolean isSoftObstacle(BlockState state) {
         Block b = state.getBlock();
-        if (b == Blocks.SOUL_SAND || b == Blocks.SOUL_SOIL) return true;
-        if (state.getBlock() instanceof LeavesBlock)         return true;
+        if (b == Blocks.COBWEB || b == Blocks.POWDER_SNOW) return true;
+        if (b instanceof LeavesBlock) return true;
         return false;
     }
 
@@ -591,15 +615,29 @@ public class PortalMaker extends Module {
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        if (!render.get() || portalFramePositions.isEmpty()) return;
+        if (render.get() && !portalFramePositions.isEmpty()) {
+            for (int i = placementIndex; i < portalFramePositions.size(); i++) {
+                BlockPos pos = portalFramePositions.get(i);
+                if (!mc.world.getBlockState(pos).isReplaceable()) continue;
 
-        for (int i = placementIndex; i < portalFramePositions.size(); i++) {
-            BlockPos pos = portalFramePositions.get(i);
-            if (!mc.world.getBlockState(pos).isReplaceable()) continue;
+                Box box = new Box(pos);
+                renderGlowLayers(event, box, lineColor.get());
+                event.renderer.box(box, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
+            }
+        }
 
-            Box box = new Box(pos);
-            renderGlowLayers(event, box, lineColor.get());
-            event.renderer.box(box, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
+        if (renderBreadcrumbs.get() && breadcrumbs.size() > 1) {
+            Vec3d prev = null;
+            for (Vec3d pos : breadcrumbs) {
+                if (prev != null) {
+                    event.renderer.line(prev.x, prev.y, prev.z, pos.x, pos.y, pos.z, breadcrumbColor.get());
+                }
+                prev = pos;
+            }
+            if (prev != null && mc.player != null) {
+                Vec3d current = mc.player.getLerpedPos(event.tickDelta);
+                event.renderer.line(prev.x, prev.y, prev.z, current.x, current.y, current.z, breadcrumbColor.get());
+            }
         }
     }
 
@@ -653,19 +691,23 @@ public class PortalMaker extends Module {
         return false;
     }
 
+    public int getObsidianCount() {
+        return countItem(Items.OBSIDIAN);
+    }
+
     private int countItem(Item targetItem) {
+        if (mc.player == null) return 0;
         int count = 0;
         for (int i = 0; i < 36; i++) {
-            if (mc.player.getInventory().getStack(i).getItem() == targetItem)
-                count += mc.player.getInventory().getStack(i).getCount();
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (stack.isOf(targetItem)) count += stack.getCount();
         }
+        ItemStack offhand = mc.player.getOffHandStack();
+        if (offhand.isOf(targetItem)) count += offhand.getCount();
         return count;
     }
 
     private boolean hasItem(Item targetItem) {
-        for (int i = 0; i < 36; i++) {
-            if (mc.player.getInventory().getStack(i).getItem() == targetItem) return true;
-        }
-        return false;
+        return countItem(targetItem) > 0;
     }
 }

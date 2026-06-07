@@ -1,9 +1,18 @@
 package com.example.addon.hud;
 
+import java.util.concurrent.TimeUnit;
+
 import com.example.addon.HuntingUtilities;
 import com.example.addon.modules.RocketPilot;
 
-import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
+import meteordevelopment.meteorclient.settings.IntSetting;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.SettingGroup;
+import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
@@ -58,6 +67,8 @@ public class RocketPilotHud extends HudElement {
     );
 
     public enum IconPosition { Left, Right, Above, Below }
+
+    public enum BarPosition { Above, Below, Left, Right }
 
     private final Setting<IconPosition> iconPosition = sgGeneral.add(new EnumSetting.Builder<IconPosition>()
         .name("icon-position")
@@ -124,20 +135,57 @@ public class RocketPilotHud extends HudElement {
         .build()
     );
 
+    private final Setting<Boolean> showBar = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-bar")
+        .description("Show a color-coded efficiency bar based on rocket consumption.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<BarPosition> barPosition = sgGeneral.add(new EnumSetting.Builder<BarPosition>()
+        .name("bar-position")
+        .description("Where the efficiency bar appears relative to the text/icons.")
+        .defaultValue(BarPosition.Below)
+        .visible(showBar::get)
+        .build()
+    );
+
     private final Setting<Boolean> showDurability = sgGeneral.add(new BoolSetting.Builder()
         .name("show-durability")
-        .description("Show the elytra's remaining durability.")
+        .description("Show the count of usable elytras in inventory.")
         .defaultValue(true)
         .build()
     );
 
-    public enum DurabilityFormat { Both, Numbers, Percentage }
+    public enum DistanceUnit { Blocks, Kilometers }
 
-    private final Setting<DurabilityFormat> durabilityFormat = sgGeneral.add(new EnumSetting.Builder<DurabilityFormat>()
-        .name("durability-format")
-        .description("How to display elytra durability.")
-        .defaultValue(DurabilityFormat.Both)
-        .visible(showDurability::get)
+    private final Setting<Boolean> showFlightTime = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-flight-time")
+        .description("Show estimated flight time remaining based on rocket consumption.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Boolean> hideTimeWhenStatic = sgGeneral.add(new BoolSetting.Builder()
+        .name("hide-time-when-static")
+        .description("Hide the flight time estimate when not moving.")
+        .defaultValue(false)
+        .visible(showFlightTime::get)
+        .build()
+    );
+
+    private final Setting<Boolean> showDistance = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-distance")
+        .description("Show estimated distance remaining based on rocket consumption.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<DistanceUnit> distanceUnit = sgGeneral.add(new EnumSetting.Builder<DistanceUnit>()
+        .name("distance-unit")
+        .description("The unit used to display the estimated remaining distance.")
+        .defaultValue(DistanceUnit.Blocks)
+        .visible(showDistance::get)
         .build()
     );
 
@@ -150,10 +198,16 @@ public class RocketPilotHud extends HudElement {
 
     // ── Elytra warnings ───────────────────────────────────────────────────────
 
-    private final Setting<Double> elytraWarningThreshold = sgElytra.add(new DoubleSetting.Builder()
-        .name("warning-threshold")
-        .description("Elytra durability % to trigger warning color.")
-        .defaultValue(25).min(0).sliderRange(0, 100).build()
+    private final Setting<Double> elytraDurabilityThreshold = sgElytra.add(new DoubleSetting.Builder()
+        .name("durability-threshold")
+        .description("Durability % below which an elytra is considered spent and not counted.")
+        .defaultValue(10.0).min(0).sliderRange(0, 100).build()
+    );
+
+    private final Setting<Integer> elytraWarningCount = sgElytra.add(new IntSetting.Builder()
+        .name("warning-count")
+        .description("Elytra count at or below which the value turns the warning color.")
+        .defaultValue(2).min(0).sliderRange(0, 20).build()
     );
 
     private final Setting<SettingColor> elytraWarningColor = sgElytra.add(new ColorSetting.Builder()
@@ -161,10 +215,10 @@ public class RocketPilotHud extends HudElement {
         .defaultValue(new SettingColor(255, 165, 0, 255)).build()
     );
 
-    private final Setting<Double> elytraCriticalThreshold = sgElytra.add(new DoubleSetting.Builder()
-        .name("critical-threshold")
-        .description("Elytra durability % to trigger critical color.")
-        .defaultValue(10).min(0).sliderRange(0, 100).build()
+    private final Setting<Integer> elytraCriticalCount = sgElytra.add(new IntSetting.Builder()
+        .name("critical-count")
+        .description("Elytra count at or below which the value turns the critical color.")
+        .defaultValue(1).min(0).sliderRange(0, 10).build()
     );
 
     private final Setting<SettingColor> elytraCriticalColor = sgElytra.add(new ColorSetting.Builder()
@@ -196,6 +250,19 @@ public class RocketPilotHud extends HudElement {
         .defaultValue(new SettingColor(255, 40, 40, 255)).build()
     );
 
+    private final Setting<Integer> lowFuelThreshold = sgRockets.add(new IntSetting.Builder()
+        .name("low-fuel-threshold")
+        .description("Estimated minutes of flight remaining to trigger critical color.")
+        .defaultValue(10).min(1).sliderMax(60)
+        .visible(showFlightTime::get)
+        .build()
+    );
+
+    // ── State ─────────────────────────────────────────────────────────────────
+
+    private long flightStartTime = -1;
+    private int flightStartRockets = -1;
+
     // ── Constructor ───────────────────────────────────────────────────────────
 
     public RocketPilotHud() { super(INFO); }
@@ -222,6 +289,7 @@ public class RocketPilotHud extends HudElement {
         boolean      showText = mode != LabelMode.Icon;
 
         // For Above/Below icon layouts each stat row is TWO visual rows tall
+        BarPosition bp = barPosition.get();
         boolean iconVertical = showIcon && (iconPos == IconPosition.Above || iconPos == IconPosition.Below);
 
         // Height of a single stat row
@@ -255,29 +323,32 @@ public class RocketPilotHud extends HudElement {
         String       durLabel = null, durValue = null;
         SettingColor durColor = valueColor.get();
         if (showDurability.get()) {
-            ItemStack eq = mc.player.getEquippedStack(EquipmentSlot.CHEST);
-            if (!eq.isEmpty() && eq.isOf(Items.ELYTRA)) {
-                int remaining = eq.getMaxDamage() - eq.getDamage();
-                int max       = eq.getMaxDamage();
-                double pct    = 100.0 * remaining / max;
-                elytraStack   = eq;
-                durLabel      = showText ? eq.getName().getString() + ": " : "";
-                durValue      = switch (durabilityFormat.get()) {
-                    case Numbers    -> String.format("%d / %d", remaining, max);
-                    case Percentage -> String.format("%.0f%%", pct);
-                    default         -> String.format("%d / %d (%.0f%%)", remaining, max, pct);
-                };
-                if      (pct <= elytraCriticalThreshold.get()) durColor = elytraCriticalColor.get();
-                else if (pct <= elytraWarningThreshold.get())  durColor = elytraWarningColor.get();
+            int count = countElytras();
+            durLabel = showText ? "Elytras: " : "";
+            durValue = String.valueOf(count);
+
+            // Find a valid elytra to show as icon
+            double threshold = elytraDurabilityThreshold.get();
+            for (ItemStack stack : mc.player.getInventory().main) {
+                if (isValidElytra(stack, threshold)) { elytraStack = stack; break; }
             }
+            if (elytraStack.isEmpty()) {
+                ItemStack chest = mc.player.getEquippedStack(EquipmentSlot.CHEST);
+                if (isValidElytra(chest, threshold)) elytraStack = chest;
+            }
+            if (elytraStack.isEmpty()) elytraStack = new ItemStack(Items.ELYTRA);
+
+            if      (count <= elytraCriticalCount.get()) durColor = elytraCriticalColor.get();
+            else if (count <= elytraWarningCount.get())  durColor = elytraWarningColor.get();
         }
 
         // Rockets
         ItemStack    rocketStack = ItemStack.EMPTY;
         String       rocketLabel = null, rocketValue = null;
         SettingColor rocketColor = valueColor.get();
-        if (showRocketCount.get()) {
-            int rockets = countRockets();
+        int currentRockets = countRockets();
+
+        if (showRocketCount.get() || showFlightTime.get()) {
             String name = "Firework Rocket";
             for (int i = 0; i < 36; i++) {
                 ItemStack s2 = mc.player.getInventory().getStack(i);
@@ -285,53 +356,132 @@ public class RocketPilotHud extends HudElement {
             }
             ItemStack offhand = mc.player.getOffHandStack();
             if (offhand.isOf(Items.FIREWORK_ROCKET)) { name = offhand.getName().getString(); rocketStack = offhand; }
-            rocketLabel = showText ? name + ": " : "";
-            rocketValue = String.valueOf(rockets);
-            if      (rockets <= rocketCriticalThreshold.get()) rocketColor = rocketCriticalColor.get();
-            else if (rockets <= rocketWarningThreshold.get())  rocketColor = rocketWarningColor.get();
+
+            if (showRocketCount.get()) {
+                rocketLabel = showText ? name + ": " : "";
+                rocketValue = String.valueOf(currentRockets);
+                if      (currentRockets <= rocketCriticalThreshold.get()) rocketColor = rocketCriticalColor.get();
+                else if (currentRockets <= rocketWarningThreshold.get())  rocketColor = rocketWarningColor.get();
+            }
+        }
+
+        // Flight Time Prediction
+        String timeLabel = null, timeValue = null;
+        SettingColor timeColor = valueColor.get();
+        String distLabel = null, distValue = null;
+        double efficiency = 1.0;
+        SettingColor distColor = valueColor.get();
+
+        if ((showFlightTime.get() || showDistance.get()) && rp.isActive()) {
+            boolean moving = mc.player.getVelocity().lengthSquared() > 0.0001;
+
+            if (!hideTimeWhenStatic.get() || moving) {
+                if (flightStartTime == -1 || currentRockets > flightStartRockets) {
+                    flightStartTime = System.currentTimeMillis();
+                    flightStartRockets = currentRockets;
+                }
+
+                int used = flightStartRockets - currentRockets;
+                long elapsed = System.currentTimeMillis() - flightStartTime;
+
+                if (used > 0 && elapsed > 1000) {
+                    double msPerRocket = (double) elapsed / used;
+                    long msRemaining = (long) (currentRockets * msPerRocket);
+                    
+                    efficiency = (double) currentRockets / flightStartRockets;
+
+                    if (showFlightTime.get()) {
+                        long hrs = TimeUnit.MILLISECONDS.toHours(msRemaining);
+                        long mins = TimeUnit.MILLISECONDS.toMinutes(msRemaining) % 60;
+                        long secs = TimeUnit.MILLISECONDS.toSeconds(msRemaining) % 60;
+                        timeLabel = showText ? "Est. Flight: " : "";
+                        timeValue = hrs > 0 ? String.format("%02d:%02d:%02d", hrs, mins, secs) : String.format("%02d:%02d", mins, secs);
+                        if (TimeUnit.MILLISECONDS.toMinutes(msRemaining) < lowFuelThreshold.get()) timeColor = rocketCriticalColor.get();
+                    }
+
+                    if (showDistance.get()) {
+                        double speed = mc.player.getVelocity().length() * 20.0;
+                        double estDist = (msRemaining / 1000.0) * speed;
+                        distLabel = showText ? "Est. Distance: " : "";
+                        if (distanceUnit.get() == DistanceUnit.Kilometers) {
+                            distValue = String.format("%.2f km", estDist / 1000.0);
+                        } else {
+                            distValue = estDist >= 1000 ? String.format("%.1fk blocks", estDist / 1000.0) : String.format("%.0f blocks", estDist);
+                        }
+                        distColor = timeColor;
+                    }
+                } else {
+                    if (showFlightTime.get()) { timeLabel = showText ? "Est. Flight: " : ""; timeValue = "Calculating..."; }
+                    if (showDistance.get())   { distLabel = showText ? "Est. Distance: " : ""; distValue = "Calculating..."; }
+                }
+            }
+        } else {
+            flightStartTime = -1;
         }
 
         boolean hasStatus = statusValue != null;
         boolean hasDur    = durLabel    != null;
         boolean hasRocket = rocketLabel != null;
-        if (!hasStatus && !hasDur && !hasRocket) { setSize(0, 0); return; }
+        boolean hasTime   = timeValue   != null;
+        boolean hasDist   = distValue   != null;
+
+        if (!hasStatus && !hasDur && !hasRocket && !hasTime && !hasDist) { setSize(0, 0); return; }
 
         // ── Measure text widths ───────────────────────────────────────────────
 
         // Text block width for each stat row (label + value, no icon)
         double durTextW    = durLabel    != null ? renderer.textWidth(durLabel,    false, s) + renderer.textWidth(durValue,    false, s) : 0;
         double rocketTextW = rocketLabel != null ? renderer.textWidth(rocketLabel, false, s) + renderer.textWidth(rocketValue, false, s) : 0;
+        double timeTextW   = timeLabel   != null ? renderer.textWidth(timeLabel,   false, s) + renderer.textWidth(timeValue,   false, s) : 0;
+        double distTextW   = distLabel   != null ? renderer.textWidth(distLabel,   false, s) + renderer.textWidth(distValue,   false, s) : 0;
 
         // Gap between icon and text — only non-zero when BOTH icon and text are shown
         double effectiveIconGap = (showIcon && showText) ? iconGap : 0;
 
         // Full row width depends on icon position
-        double durW, rocketW;
+        double durW, rocketW, timeW, distW;
         if (!showIcon || iconVertical) {
             // Vertical icon: icon sits above/below text, row width = max(iconSz, textW)
             durW    = durLabel    != null ? (showIcon && !elytraStack.isEmpty() ? Math.max(iconSz, durTextW)    : durTextW)    : 0;
             rocketW = rocketLabel != null ? (showIcon && !rocketStack.isEmpty() ? Math.max(iconSz, rocketTextW) : rocketTextW) : 0;
+            timeW   = timeLabel   != null ? (showIcon ? Math.max(iconSz, timeTextW) : timeTextW) : 0;
+            distW   = distLabel   != null ? (showIcon ? Math.max(iconSz, distTextW) : distTextW) : 0;
         } else {
             // Horizontal icon (Left/Right): icon + gap (only if text present) + text
             double durIconW    = (showIcon && !elytraStack.isEmpty())  ? iconSz + effectiveIconGap : 0;
             double rocketIconW = (showIcon && !rocketStack.isEmpty())  ? iconSz + effectiveIconGap : 0;
+            double timeIconW   = showIcon ? iconSz + effectiveIconGap : 0;
+            double distIconW   = showIcon ? iconSz + effectiveIconGap : 0;
             durW    = durLabel    != null ? durIconW    + durTextW    : 0;
             rocketW = rocketLabel != null ? rocketIconW + rocketTextW : 0;
+            timeW   = timeLabel   != null ? timeIconW   + timeTextW   : 0;
+            distW   = distLabel   != null ? distIconW   + distTextW   : 0;
         }
 
         // ── Element dimensions ────────────────────────────────────────────────
 
-        double contentW = Math.max(statusW, Math.max(durW, rocketW));
+        double contentW = Math.max(statusW, Math.max(durW, Math.max(rocketW, Math.max(timeW, distW))));
         // Ensure a minimum width when only icons are shown so the element is visible
         if (showIcon && !showText) contentW = Math.max(contentW, iconSz);
         double totalW   = contentW + padH * 2;
+        
+        double contentH = (hasStatus ? statusRowH + rowGap : 0)
+                        + (hasDur ? statRowH + rowGap : 0)
+                        + (hasRocket ? statRowH + rowGap : 0)
+                        + (hasTime ? statRowH + rowGap : 0)
+                        + (hasDist ? statRowH + rowGap : 0)
+                        - rowGap;
 
-        double totalH = padV;
-        if (hasStatus)  totalH += statusRowH + rowGap;
-        if (hasDur)     totalH += statRowH   + rowGap;
-        if (hasRocket)  totalH += statRowH   + rowGap;
-        totalH -= rowGap; // remove trailing gap
-        totalH += padV;
+        double barSize = 3 * s;
+        double barGap  = 3 * s;
+        boolean barVertical = bp == BarPosition.Left || bp == BarPosition.Right;
+
+        double totalH = contentH + padV * 2;
+
+        if (showBar.get()) {
+            if (barVertical) totalW += barSize + barGap;
+            else             totalH += barSize + barGap;
+        }
 
         // ── Draw ──────────────────────────────────────────────────────────────
 
@@ -339,17 +489,30 @@ public class RocketPilotHud extends HudElement {
         boolean   rightAlign  = align == Alignment.Right;
         boolean   centerAlign = align == Alignment.Center;
 
-        double curY = y + padV;
+        if (showBackground.get())
+            renderer.quad(x, y, totalW, totalH, backgroundColor.get());
+
+        double contentX = x + padH;
+        double contentY = y + padV;
+
+        if (showBar.get()) {
+            if (bp == BarPosition.Left) contentX += barSize + barGap;
+            if (bp == BarPosition.Above) contentY += barSize + barGap;
+        }
+
+        double curX = contentX - padH; // Back out padH because draw methods add it back
+        double contentRowW = contentW + padH * 2;
+        double curY = contentY;
 
         if (hasStatus) {
-            drawTextRow(renderer, s, x, curY, totalW, padH, statusRowH, lineHeight,
+            drawTextRow(renderer, s, curX, curY, contentRowW, padH, statusRowH, lineHeight,
                 rightAlign, centerAlign, statusW,
                 statusLabel, statusValue, labelColor.get(), valueColor.get());
             curY += statusRowH + rowGap;
         }
 
         if (hasDur) {
-            drawStatRow(renderer, s, x, curY, totalW, padH, statRowH, lineHeight,
+            drawStatRow(renderer, s, curX, curY, contentRowW, padH, statRowH, lineHeight,
                 rightAlign, centerAlign, durW, durTextW,
                 showIcon ? elytraStack : ItemStack.EMPTY, iconSz, effectiveIconGap, iconPos,
                 durLabel, durValue, labelColor.get(), durColor);
@@ -357,10 +520,50 @@ public class RocketPilotHud extends HudElement {
         }
 
         if (hasRocket) {
-            drawStatRow(renderer, s, x, curY, totalW, padH, statRowH, lineHeight,
+            drawStatRow(renderer, s, curX, curY, contentRowW, padH, statRowH, lineHeight,
                 rightAlign, centerAlign, rocketW, rocketTextW,
                 showIcon ? rocketStack : ItemStack.EMPTY, iconSz, effectiveIconGap, iconPos,
                 rocketLabel, rocketValue, labelColor.get(), rocketColor);
+            curY += statRowH + rowGap;
+        }
+
+        if (hasTime) {
+            drawStatRow(renderer, s, curX, curY, contentRowW, padH, statRowH, lineHeight,
+                rightAlign, centerAlign, timeW, timeTextW,
+                showIcon ? new ItemStack(Items.CLOCK) : ItemStack.EMPTY, iconSz, effectiveIconGap, iconPos,
+                timeLabel, timeValue, labelColor.get(), timeColor);
+            curY += statRowH + rowGap;
+        }
+
+        if (hasDist) {
+            drawStatRow(renderer, s, curX, curY, contentRowW, padH, statRowH, lineHeight,
+                rightAlign, centerAlign, distW, distTextW,
+                showIcon ? new ItemStack(Items.COMPASS) : ItemStack.EMPTY, iconSz, effectiveIconGap, iconPos,
+                distLabel, distValue, labelColor.get(), distColor);
+        }
+
+        if (showBar.get()) {
+            double bx, by, bw, bh;
+            SettingColor bCol = efficiency > 0.5 ? valueColor.get() : efficiency > 0.2 ? rocketWarningColor.get() : rocketCriticalColor.get();
+            
+            if (!barVertical) {
+                bw = contentW;
+                bh = barSize;
+                bx = contentX;
+                by = (bp == BarPosition.Above) ? contentY - barGap - bh : contentY + contentH + barGap;
+
+                renderer.quad(bx, by, bw, bh, new Color(0, 0, 0, 100));
+                renderer.quad(bx, by, bw * efficiency, bh, bCol);
+            } else {
+                bw = barSize;
+                bh = contentH;
+                bx = (bp == BarPosition.Left) ? contentX - barGap - bw : contentX + contentW + barGap;
+                by = contentY;
+
+                renderer.quad(bx, by, bw, bh, new Color(0, 0, 0, 100));
+                double progressH = bh * efficiency;
+                renderer.quad(bx, by + (bh - progressH), bw, progressH, bCol);
+            }
         }
 
         setSize(totalW, totalH);
@@ -523,5 +726,26 @@ public class RocketPilotHud extends HudElement {
         ItemStack offhand = mc.player.getOffHandStack();
         if (offhand.isOf(Items.FIREWORK_ROCKET)) count += offhand.getCount();
         return count;
+    }
+
+    private int countElytras() {
+        if (mc.player == null) return 0;
+        int count = 0;
+        double threshold = elytraDurabilityThreshold.get();
+
+        for (ItemStack stack : mc.player.getInventory().main) {
+            if (isValidElytra(stack, threshold)) count++;
+        }
+        if (isValidElytra(mc.player.getEquippedStack(EquipmentSlot.CHEST), threshold)) count++;
+        if (isValidElytra(mc.player.getOffHandStack(), threshold)) count++;
+
+        return count;
+    }
+
+    private boolean isValidElytra(ItemStack stack, double threshold) {
+        if (stack == null || stack.isEmpty() || !stack.isOf(Items.ELYTRA)) return false;
+        if (!stack.isDamageable()) return true;
+        double pct = 100.0 * (stack.getMaxDamage() - stack.getDamage()) / stack.getMaxDamage();
+        return pct > threshold;
     }
 }

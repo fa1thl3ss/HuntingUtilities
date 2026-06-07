@@ -20,7 +20,7 @@ public class StatisticsInformation extends HudElement {
     public static final HudElementInfo<StatisticsInformation> INFO = new HudElementInfo<>(
         HuntingUtilities.HUD_GROUP,
         "statistics-information",
-        "Displays speed, FPS, TPS, direction, memory, chunks, player count, distance traveled, and time online.",
+        "Provides a comprehensive display of real-time performance metrics, navigational data, and session-specific statistics.",
         StatisticsInformation::new
     );
 
@@ -155,6 +155,46 @@ public class StatisticsInformation extends HudElement {
         .description("How to display the time online. HMS: 1h 23m 45s  HM: 1h 23m  Seconds: 5025s")
         .defaultValue(TimeFormat.HMS)
         .visible(showTimeOnline::get)
+        .build()
+    );
+
+    // Stability
+    private final Setting<Boolean> showStability = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-stability")
+        .description("Show connection stability based on time since last server tick.")
+        .defaultValue(false)
+        .build()
+    );
+
+    // TPS Guard
+    private final Setting<Boolean> tpsGuard = sgGeneral.add(new BoolSetting.Builder()
+        .name("tps-guard")
+        .description("Show a warning if TPS is too low for safe movement through unloaded chunks.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Double> tpsGuardThreshold = sgGeneral.add(new DoubleSetting.Builder()
+        .name("tps-guard-threshold")
+        .description("TPS threshold for the safety warning.")
+        .defaultValue(15.0).min(1.0).max(20.0)
+        .visible(tpsGuard::get)
+        .build()
+    );
+
+    private final Setting<Boolean> tpsGuardHideStatic = sgGeneral.add(new BoolSetting.Builder()
+        .name("tps-guard-hide-stationary")
+        .description("Hide the TPS guard warning when the player is not moving.")
+        .defaultValue(false)
+        .visible(tpsGuard::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> tpsGuardColor = sgGeneral.add(new ColorSetting.Builder()
+        .name("tps-guard-color")
+        .description("Color for the TPS guard warning.")
+        .defaultValue(new SettingColor(255, 60, 60, 255))
+        .visible(tpsGuard::get)
         .build()
     );
 
@@ -372,8 +412,30 @@ public class StatisticsInformation extends HudElement {
             };
         }
 
+        // ── Line 8: Stability ─────────────────────────────────────────────────────
+        String stabLabel = null, stabValue = null;
+        SettingColor stabColor = valueColor.get();
+        if (showStability.get()) {
+            long lastTick = (long) TickRate.INSTANCE.getTimeSinceLastTick();
+            stabLabel = "Stability: ";
+            if (lastTick > 1000) {
+                stabValue = "DESYNC";
+                stabColor = new SettingColor(255, 60, 60, 255);
+            } else {
+                stabValue = lastTick + "ms";
+                if (lastTick > 250) stabColor = new SettingColor(255, 200, 0, 255);
+            }
+        }
+
+        // ── Line 10: TPS Guard ────────────────────────────────────────────────────
+        String guardLabel = null, guardValue = null;
+        if (tpsGuard.get() && tps < tpsGuardThreshold.get() && !(tpsGuardHideStatic.get() && getSpeedBps() < 0.1)) {
+            guardLabel = "! TPS Guard: ";
+            guardValue = "DANGER";
+        }
+
         // ── Measure all line widths ───────────────────────────────────────────────
-        double line1W = 0, line2W = 0, line3W = 0, line4W = 0, line5W = 0, line6W = 0, line7W = 0;
+        double line1W = 0, line2W = 0, line3W = 0, line4W = 0, line5W = 0, line6W = 0, line7W = 0, line8W = 0, line10W = 0;
 
         if (speedLabel  != null) line1W = renderer.textWidth(speedLabel,  false, s) + renderer.textWidth(speedValue,  false, s);
         if (fpsLabel    != null) line2W += renderer.textWidth(fpsLabel,   false, s) + renderer.textWidth(fpsValue,   false, s);
@@ -386,6 +448,8 @@ public class StatisticsInformation extends HudElement {
         if (playerLabel != null) line5W += renderer.textWidth(playerLabel, false, s) + renderer.textWidth(playerValue, false, s);
         if (distLabel   != null) line6W = renderer.textWidth(distLabel,   false, s) + renderer.textWidth(distValue,  false, s);
         if (timeLabel   != null) line7W = renderer.textWidth(timeLabel,   false, s) + renderer.textWidth(timeValue,  false, s);
+        if (stabLabel   != null) line8W = renderer.textWidth(stabLabel,   false, s) + renderer.textWidth(stabValue,  false, s);
+        if (guardLabel  != null) line10W = renderer.textWidth(guardLabel,  false, s) + renderer.textWidth(guardValue,  false, s);
 
         boolean hasLine1 = speedLabel  != null;
         boolean hasLine2 = fpsLabel    != null || tpsLabel    != null;
@@ -394,17 +458,19 @@ public class StatisticsInformation extends HudElement {
         boolean hasLine5 = chunkLabel  != null || playerLabel != null;
         boolean hasLine6 = distLabel   != null;
         boolean hasLine7 = timeLabel   != null;
+        boolean hasLine8 = stabLabel   != null;
+        boolean hasLine10 = guardLabel != null;
 
-        if (!hasLine1 && !hasLine2 && !hasLine3 && !hasLine4 && !hasLine5 && !hasLine6 && !hasLine7) {
+        if (!hasLine1 && !hasLine2 && !hasLine3 && !hasLine4 && !hasLine5 && !hasLine6 && !hasLine7 && !hasLine8 && !hasLine10) {
             setSize(0, 0); return;
         }
 
         double maxLineW  = Math.max(line1W, Math.max(line2W, Math.max(line3W, Math.max(line4W,
-                           Math.max(line5W, Math.max(line6W, line7W))))));
+                           Math.max(line5W, Math.max(line6W, Math.max(line7W, Math.max(line8W, line10W))))))));
         double totalW    = maxLineW + padH * 2;
         int    lineCount = (hasLine1 ? 1 : 0) + (hasLine2 ? 1 : 0) + (hasLine3 ? 1 : 0)
                          + (hasLine4 ? 1 : 0) + (hasLine5 ? 1 : 0) + (hasLine6 ? 1 : 0)
-                         + (hasLine7 ? 1 : 0);
+                         + (hasLine7 ? 1 : 0) + (hasLine8 ? 1 : 0) + (hasLine10 ? 1 : 0);
         double totalH    = lineCount * lineHeight + (lineCount - 1) * rowGap + padV * 2;
 
         int lineIdx = 0;
@@ -431,6 +497,12 @@ public class StatisticsInformation extends HudElement {
 
         if (hasLine7) lineIdx = drawLabelValue(renderer, s, padH, padV, rowGap, lineHeight,
             rightAlign, totalW, line7W, lineIdx, timeLabel, timeValue, labelColor.get(), valueColor.get());
+
+        if (hasLine8) lineIdx = drawLabelValue(renderer, s, padH, padV, rowGap, lineHeight,
+            rightAlign, totalW, line8W, lineIdx, stabLabel, stabValue, labelColor.get(), stabColor);
+
+        if (hasLine10) lineIdx = drawLabelValue(renderer, s, padH, padV, rowGap, lineHeight,
+            rightAlign, totalW, line10W, lineIdx, guardLabel, guardValue, labelColor.get(), tpsGuardColor.get());
 
         setSize(totalW, totalH);
     }

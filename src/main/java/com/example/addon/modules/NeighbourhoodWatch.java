@@ -1,13 +1,18 @@
 package com.example.addon.modules;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import com.example.addon.HuntingUtilities;
 
+import meteordevelopment.meteorclient.renderer.text.TextRenderer;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
+import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -16,11 +21,14 @@ import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
+import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringListSetting;
 import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.render.NametagUtils;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
@@ -30,6 +38,8 @@ import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
+import org.joml.Vector3d;
 
 public class NeighbourhoodWatch extends Module {
 
@@ -43,14 +53,29 @@ public class NeighbourhoodWatch extends Module {
     public enum TabFilter  { Friends, Enemies, Proxies, Others, All }
     public enum FilterMode { Censor, AutoIgnore }
 
+    public enum LogoutRenderMode {
+        FullBox,
+        FlatCap,
+        Both,
+        None
+    }
+
+    public enum CoordVisibility {
+        Visible,
+        Censored,
+        Hidden
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Setting Groups
     // ═══════════════════════════════════════════════════════════════════════════
 
     private final SettingGroup sgSafety      = settings.createGroup("Safety");
+    private final SettingGroup sgLogout      = settings.createGroup("Logout Tracking");
     private final SettingGroup sgMsgControl  = settings.createGroup("Message Control");
     private final SettingGroup sgTracking    = settings.createGroup("Player Tracking");
     private final SettingGroup sgFriends     = settings.createGroup("Friends & Enemies");
+    private final SettingGroup sgPrivacy     = settings.createGroup("Privacy");
     private final SettingGroup sgTabList     = settings.createGroup("Tab List Monitoring");
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -85,6 +110,65 @@ public class NeighbourhoodWatch extends Module {
         .description("Does not disconnect if the nearby player is a proxy.")
         .defaultValue(true)
         .visible(disconnectOnPlayer::get)
+        .build()
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Settings — Logout Tracking
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private final Setting<Boolean> trackLogouts = sgLogout.add(new BoolSetting.Builder()
+        .name("track-logouts")
+        .description("Remembers where players log out nearby.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<LogoutRenderMode> logoutRenderMode = sgLogout.add(new EnumSetting.Builder<LogoutRenderMode>()
+        .name("render-mode")
+        .description("How the logout spot is visualized in the 3D world.")
+        .defaultValue(LogoutRenderMode.FullBox)
+        .visible(trackLogouts::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> logoutColor = sgLogout.add(new ColorSetting.Builder()
+        .name("logout-color")
+        .description("Color for the logout spot markers and nametags.")
+        .defaultValue(new SettingColor(255, 40, 40, 150))
+        .visible(trackLogouts::get)
+        .build()
+    );
+
+    private final Setting<Double> logoutNametagScale = sgLogout.add(new DoubleSetting.Builder()
+        .name("nametag-scale")
+        .description("Scale of the floating text above the logout spot.")
+        .defaultValue(1.5).min(0.5).sliderMax(3.0)
+        .visible(trackLogouts::get)
+        .build()
+    );
+
+    private final Setting<Integer> logoutCleanupMinutes = sgLogout.add(new IntSetting.Builder()
+        .name("cleanup-minutes")
+        .description("Auto-remove logout spots after X minutes.")
+        .defaultValue(15).min(1).sliderMax(60)
+        .visible(trackLogouts::get)
+        .build()
+    );
+
+    private final Setting<Integer> maxLogouts = sgLogout.add(new IntSetting.Builder()
+        .name("max-logouts")
+        .description("Maximum number of logout spots to keep.")
+        .defaultValue(10).min(1).sliderMax(50)
+        .visible(trackLogouts::get)
+        .build()
+    );
+
+    private final Setting<Keybind> clearLogoutsKey = sgLogout.add(new KeybindSetting.Builder()
+        .name("clear-logouts-key")
+        .description("Keybind to manually clear all tracked logout spots.")
+        .defaultValue(Keybind.none())
+        .action(this::clearLogouts)
         .build()
     );
 
@@ -251,6 +335,17 @@ public class NeighbourhoodWatch extends Module {
         .build()
     );
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Settings — Privacy
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private final Setting<CoordVisibility> coordVisibility = sgPrivacy.add(new EnumSetting.Builder<CoordVisibility>()
+        .name("coord-visibility")
+        .description("Controls how coordinates are displayed in chat and HUD.")
+        .defaultValue(CoordVisibility.Visible)
+        .build()
+    );
+
     // ── Others ────────────────────────────────────────────────────────────────
 
     private final Setting<SettingColor> otherColor = sgFriends.add(new ColorSetting.Builder()
@@ -290,6 +385,8 @@ public class NeighbourhoodWatch extends Module {
     // State
     // ═══════════════════════════════════════════════════════════════════════════
 
+    public record LogoutRecord(String name, Vec3d pos, long time, String dimension) {}
+
     private final Set<Integer> notifiedPlayers    = new HashSet<>();
     private final Set<Integer> activelyOutlined   = new HashSet<>();
     private final Set<String>  ignoredThisSession = new HashSet<>();
@@ -297,6 +394,9 @@ public class NeighbourhoodWatch extends Module {
     private final Set<String>  friendSet          = new HashSet<>();
     private final Set<String>  enemySet           = new HashSet<>();
     private final Set<String>  proxySet           = new HashSet<>();
+
+    private final Map<String, Vec3d> lastKnownPos = new HashMap<>();
+    private final List<LogoutRecord> logouts      = new ArrayList<>();
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -314,6 +414,7 @@ public class NeighbourhoodWatch extends Module {
     @Override
     public void onActivate() {
         resetState();
+        logouts.clear();
         updateFriendEnemySets();
         if (mc.player != null && mc.player.networkHandler != null) {
             mc.player.networkHandler.getPlayerList().forEach(entry -> {
@@ -332,6 +433,7 @@ public class NeighbourhoodWatch extends Module {
     @EventHandler
     private void onGameJoined(GameJoinedEvent event) {
         clearAllOutlines();
+        logouts.clear();
         resetState();
     }
 
@@ -345,6 +447,22 @@ public class NeighbourhoodWatch extends Module {
 
         if (tickDisconnectOnPlayer()) return;
         tickPlayerTracking();
+
+        if (trackLogouts.get()) {
+            // Update last known positions for logout tracking
+            lastKnownPos.clear();
+            for (PlayerEntity player : mc.world.getPlayers()) {
+                if (player == mc.player) continue;
+                lastKnownPos.put(player.getName().getString(), player.getPos());
+            }
+
+            // Auto cleanup
+            long cutoff = System.currentTimeMillis() - (logoutCleanupMinutes.get() * 60000L);
+            if (logouts.removeIf(r -> r.time < cutoff)) {
+                // Trigger HUD update if needed
+            }
+        }
+
         tickOutlineShader();
     }
 
@@ -408,22 +526,81 @@ public class NeighbourhoodWatch extends Module {
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        if (!glowEnabled.get() || !trackPlayers.get()) return;
         if (mc.world == null || mc.player == null) return;
 
-        for (PlayerEntity player : mc.world.getPlayers()) {
-            if (!activelyOutlined.contains(player.getId())) continue;
+        // ── Render Tracked Players ──
+        if (glowEnabled.get() && trackPlayers.get()) {
+            for (PlayerEntity player : mc.world.getPlayers()) {
+                if (!activelyOutlined.contains(player.getId())) continue;
 
-            String       name   = player.getName().getString();
-            PlayerStatus status = getPlayerStatusPublic(name);
-            SettingColor color  = switch (status) {
-                case Friend -> friendColor.get();
-                case Enemy  -> enemyColor.get();
-                case Proxy  -> proxyColor.get();
-                case Other  -> otherColor.get();
-            };
+                String       name   = player.getName().getString();
+                PlayerStatus status = getPlayerStatusPublic(name);
+                SettingColor color  = switch (status) {
+                    case Friend -> friendColor.get();
+                    case Enemy  -> enemyColor.get();
+                    case Proxy  -> proxyColor.get();
+                    case Other  -> otherColor.get();
+                };
 
-            renderGlowLayers(event, player.getBoundingBox(), color);
+                renderGlowLayers(event, player.getBoundingBox(), color);
+            }
+        }
+
+        // ── Render Logout Spots ──
+        if (trackLogouts.get() && logoutRenderMode.get() != LogoutRenderMode.None) {
+            String currentDim = mc.world.getRegistryKey().getValue().toString();
+            LogoutRenderMode mode = logoutRenderMode.get();
+            SettingColor color = logoutColor.get();
+
+            for (LogoutRecord record : logouts) {
+                if (!record.dimension().equals(currentDim)) continue;
+
+                // Draw Visuals
+                if (mode == LogoutRenderMode.FullBox || mode == LogoutRenderMode.Both) {
+                    Box box = new Box(record.pos().x - 0.3, record.pos().y, record.pos().z - 0.3, record.pos().x + 0.3, record.pos().y + 1.8, record.pos().z + 0.3);
+                    event.renderer.box(box, color, color, ShapeMode.Both, 0);
+                }
+
+                if (mode == LogoutRenderMode.FlatCap || mode == LogoutRenderMode.Both) {
+                    double p = 0.4;
+                    Box cap = new Box(record.pos().x - p, record.pos().y, record.pos().z - p, record.pos().x + p, record.pos().y + 0.05, record.pos().z + p);
+                    event.renderer.box(cap, color, color, ShapeMode.Both, 0);
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    private void onRender2D(Render2DEvent event) {
+        if (mc.world == null || mc.player == null) return;
+        if (!trackLogouts.get() || logoutRenderMode.get() == LogoutRenderMode.None) return;
+
+        String currentDim = mc.world.getRegistryKey().getValue().toString();
+        LogoutRenderMode mode = logoutRenderMode.get();
+        SettingColor color = logoutColor.get();
+
+        for (LogoutRecord record : logouts) {
+            if (!record.dimension.equals(currentDim)) continue;
+
+            long elapsed = (System.currentTimeMillis() - record.time()) / 1000;
+            String posStr = formatPos(record.pos());
+            String text = String.format("%s %s (%s ago)", record.name(), posStr, formatTime(elapsed));
+
+            Vector3d tagPos = new Vector3d(record.pos().x, record.pos().y + (mode == LogoutRenderMode.FlatCap ? 0.5 : 2.1), record.pos().z);
+
+            if (NametagUtils.to2D(tagPos, logoutNametagScale.get())) {
+                NametagUtils.begin(tagPos, event.drawContext);
+                TextRenderer tr = TextRenderer.get();
+                double w = tr.getWidth(text);
+                double h = tr.getHeight();
+
+                event.drawContext.fill((int)(-w / 2 - 2), (int)(-h / 2 - 2), (int)(w / 2 + 2), (int)(h / 2 + 2), new Color(0, 0, 0, 150).getPacked());
+
+                tr.begin(1.0, false, true);
+                tr.render(text, -w / 2, -h / 2, color);
+                tr.end();
+                NametagUtils.end(event.drawContext);
+            }
         }
     }
 
@@ -433,7 +610,7 @@ public class NeighbourhoodWatch extends Module {
 
     @EventHandler
     private void onPacketReceive(PacketEvent.Receive event) {
-        if (!monitorTabList.get() || !(event.packet instanceof PlayerListS2CPacket packet)) return;
+        if (!(event.packet instanceof PlayerListS2CPacket packet)) return;
 
         for (PlayerListS2CPacket.Entry entry : packet.getEntries()) {
             if (entry.profile() == null) continue;
@@ -441,9 +618,20 @@ public class NeighbourhoodWatch extends Module {
             if (name == null || name.isEmpty()) continue;
 
             if (packet.getActions().contains(PlayerListS2CPacket.Action.ADD_PLAYER)) {
-                if (playersInTab.add(name)) handleTabListChange(name, "joined");
+                if (playersInTab.add(name)) {
+                    if (monitorTabList.get()) handleTabListChange(name, "joined");
+                    logouts.removeIf(r -> r.name.equalsIgnoreCase(name));
+                }
             } else if (packet.getActions().contains(PlayerListS2CPacket.Action.UPDATE_LISTED) && !entry.listed()) {
-                if (playersInTab.remove(name)) handleTabListChange(name, "left");
+                if (playersInTab.remove(name)) {
+                    if (monitorTabList.get()) handleTabListChange(name, "left");
+                    if (trackLogouts.get() && lastKnownPos.containsKey(name)) {
+                        if (logouts.size() >= maxLogouts.get()) logouts.remove(0);
+                        Vec3d pos = lastKnownPos.get(name);
+                        logouts.add(new LogoutRecord(name, pos, System.currentTimeMillis(), mc.world.getRegistryKey().getValue().toString()));
+                        info("§c%s §7logged out at %s", name, formatPos(pos));
+                    }
+                }
             }
         }
     }
@@ -695,6 +883,28 @@ public class NeighbourhoodWatch extends Module {
         return best;
     }
 
+    public String formatPos(Vec3d pos) {
+        if (pos == null) return "";
+        return switch (coordVisibility.get()) {
+            case Censored -> "§8(§fXXXX§8, §fXXXX§8, §fXXXX§8)";
+            case Hidden -> "";
+            default -> String.format("§8(§f%d§8, §f%d§8, §f%d§8)", (int) pos.x, (int) pos.y, (int) pos.z);
+        };
+    }
+
+    private void clearLogouts() {
+        if (mc.currentScreen != null) return;
+        logouts.clear();
+        lastKnownPos.clear();
+        info("Cleared all logout spots.");
+    }
+
+    private String formatTime(long seconds) {
+        if (seconds < 60) return seconds + "s";
+        if (seconds < 3600) return (seconds / 60) + "m";
+        return (seconds / 3600) + "h " + ((seconds % 3600) / 60) + "m";
+    }
+
     private void clearAllOutlines() {
         if (mc.world != null) {
             for (int id : activelyOutlined) {
@@ -716,6 +926,7 @@ public class NeighbourhoodWatch extends Module {
         notifiedPlayers.clear();
         ignoredThisSession.clear();
         playersInTab.clear();
+        lastKnownPos.clear();
         // Note: activelyOutlined is cleared separately via clearAllOutlines()
         // so that setGlowing(false) is called before the IDs are lost.
     }
@@ -782,5 +993,9 @@ public class NeighbourhoodWatch extends Module {
     /** Exposes whether the disconnect-on-player safety feature is armed. Used by the HUD. */
     public boolean isDisconnectOnPlayerArmed() {
         return disconnectOnPlayer.get();
+    }
+
+    public List<LogoutRecord> getLogouts() {
+        return logouts;
     }
 }

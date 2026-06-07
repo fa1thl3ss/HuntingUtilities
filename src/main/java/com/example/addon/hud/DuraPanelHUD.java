@@ -1,8 +1,16 @@
 package com.example.addon.hud;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.example.addon.HuntingUtilities;
 
-import meteordevelopment.meteorclient.settings.*;
+import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
@@ -10,9 +18,6 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.item.ItemStack;
-
-import java.util.ArrayList;
-import java.util.List;
 
 public class DuraPanelHUD extends HudElement {
 
@@ -282,7 +287,6 @@ public class DuraPanelHUD extends HudElement {
     public void render(HudRenderer renderer) {
         if (mc.player == null) { setSize(0, 0); return; }
 
-        // Build slot list — label is suppressed in Flat mode (we only show the value)
         boolean showText = displayMode.get() == DisplayMode.Vertical
             && labelMode.get() != LabelMode.Icon;
 
@@ -305,13 +309,6 @@ public class DuraPanelHUD extends HudElement {
 
     // ─────────────────────────────────────────────────────────────────────────
     // FLAT render
-    //
-    //  Layout per slot column:
-    //
-    //    [durability value]   ← centred over column, colored by threshold
-    //    [  item icon      ]  ← optional, iconScale applied
-    //
-    //  Columns are laid out left-to-right with flatSlotGap between them.
     // ─────────────────────────────────────────────────────────────────────────
 
     private void renderFlat(HudRenderer renderer, List<SlotRow> rows) {
@@ -325,7 +322,6 @@ public class DuraPanelHUD extends HudElement {
         boolean drawIcon = flatShowIcon.get();
         double  iconSz   = drawIcon ? 16.0 * iconScale.get() : 0;
 
-        // Each column is as wide as max(valueTextWidth, iconSz)
         double[] colW    = new double[rows.size()];
         double[] valW    = new double[rows.size()];
 
@@ -347,23 +343,16 @@ public class DuraPanelHUD extends HudElement {
         if (showBackground.get())
             renderer.quad(x, y, totalW, totalH, backgroundColor.get());
 
-        Alignment align = alignment.get();
-
-        // Determine starting X for the whole strip based on alignment
-        // (alignment here shifts the strip within a wider hypothetical container —
-        //  since totalW is tight-fitted, Left is the natural start)
         double stripX = x + padH;
 
         for (int i = 0; i < rows.size(); i++) {
             SlotRow row = rows.get(i);
             double cw   = colW[i];
 
-            // Value text — centred within column
             double textX = stripX + (cw - valW[i]) / 2.0;
             double textY = y + padV;
             renderer.text(row.value(), textX, textY, row.valueCol(), false, s);
 
-            // Icon — centred within column, below the text
             if (drawIcon && !row.stack().isEmpty()) {
                 double iconX = stripX + (cw - iconSz) / 2.0;
                 double iconY = textY + lineHeight + textIconGap;
@@ -377,7 +366,7 @@ public class DuraPanelHUD extends HudElement {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // VERTICAL render (original behaviour)
+    // VERTICAL render
     // ─────────────────────────────────────────────────────────────────────────
 
     private void renderVertical(HudRenderer renderer, List<SlotRow> rows) {
@@ -462,7 +451,7 @@ public class DuraPanelHUD extends HudElement {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Build a SlotRow from an ItemStack, respecting hide settings
+    // Build a SlotRow from an ItemStack, respecting hide settings.
     // ─────────────────────────────────────────────────────────────────────────
 
     private void addSlot(List<SlotRow> rows, ItemStack stack, boolean showText) {

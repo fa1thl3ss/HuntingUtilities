@@ -228,6 +228,11 @@ public class SignScanner extends Module {
         .name("censorship").description("Censors bad words on signs.")
         .defaultValue(true).build());
 
+    private final Setting<Boolean> redactCoordinates = sgFilter.add(new BoolSetting.Builder()
+        .name("redact-coordinates")
+        .description("Automatically masks text that looks like coordinates (e.g. 100000, 64, -20000).")
+        .defaultValue(true).build());
+
     private final Setting<List<String>> badWords = sgFilter.add(new StringListSetting.Builder()
         .name("Banned Words").description("List of words to censor.")
         .defaultValue(List.of("badword1", "badword2"))
@@ -493,11 +498,16 @@ public class SignScanner extends Module {
     }
 
     public String censor(String input) {
+        String working = input;
         for (String bad : badWords.get()) {
-            try { if (input.matches("(?i).*" + bad + ".*")) return "****"; }
+            try { if (working.matches("(?i).*" + bad + ".*")) return "****"; }
             catch (Exception ignored) {}
         }
-        return input;
+        if (redactCoordinates.get()) {
+            // Matches patterns like "100000 64 -20000" or "X: 100k Z: 200k"
+            working = working.replaceAll("-?\\d+[kKmM]?([\\s,]+-?\\d+[kKmM]?){1,2}", "XXXX");
+        }
+        return working;
     }
 
     private Text cleanSignText(Text text) {

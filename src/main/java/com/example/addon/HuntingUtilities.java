@@ -3,16 +3,19 @@ package com.example.addon;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.addon.hud.DuraPanelHUD;
 import com.example.addon.hud.InfoAssistantHud;
 import com.example.addon.hud.LootLensHud;
+import com.example.addon.hud.MobanomHUD;
+import com.example.addon.hud.NeighbourhoodWatchHUD;
+import com.example.addon.hud.PortalStockHud;
 import com.example.addon.hud.PortalTrackerHud;
 import com.example.addon.hud.PositionHud;
 import com.example.addon.hud.RocketPilotHud;
+import com.example.addon.hud.SecondLifeHUD;
+import com.example.addon.hud.ServerReportHUD;
 import com.example.addon.hud.StatisticsInformation;
 import com.example.addon.hud.TimeThrottleHUD;
-import com.example.addon.hud.NeighbourhoodWatchHUD;
-import com.example.addon.hud.DuraPanelHUD;
-import com.example.addon.hud.ServerReportHUD;
 import com.example.addon.modules.DungeonAssistant;
 import com.example.addon.modules.ElytraAssistant;
 import com.example.addon.modules.EndSafe;
@@ -77,14 +80,17 @@ public class HuntingUtilities extends MeteorAddon {
         // HUD elements
         Hud.get().register(StatisticsInformation.INFO);
         Hud.get().register(PortalTrackerHud.INFO);
+        Hud.get().register(PortalStockHud.INFO);
         Hud.get().register(LootLensHud.INFO);
         Hud.get().register(PositionHud.INFO);
         Hud.get().register(RocketPilotHud.INFO);
         Hud.get().register(InfoAssistantHud.INFO);
         Hud.get().register(TimeThrottleHUD.INFO);
+        Hud.get().register(MobanomHUD.INFO);
         Hud.get().register(NeighbourhoodWatchHUD.INFO);
         Hud.get().register(DuraPanelHUD.INFO);
         Hud.get().register(ServerReportHUD.INFO);
+        Hud.get().register(SecondLifeHUD.INFO);
     }
 
     @Override

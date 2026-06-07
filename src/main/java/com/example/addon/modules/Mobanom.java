@@ -47,7 +47,7 @@ public class Mobanom extends Module {
     // Enums
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private enum AnomalyType {
+    public enum AnomalyType {
         DIMENSION_NETHER,
         DIMENSION_END,
         DIMENSION_OVERWORLD,
@@ -504,5 +504,9 @@ public class Mobanom extends Module {
 
     private SettingColor withAlpha(SettingColor color, int alpha) {
         return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
+    }
+
+    public Map<Integer, AnomalyType> getAnomalies() {
+        return highlightedEntities;
     }
 }

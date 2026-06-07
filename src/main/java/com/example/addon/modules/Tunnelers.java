@@ -8,8 +8,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -73,7 +73,6 @@ public class Tunnelers extends Module {
     public enum TunnelType {
         TUNNEL_1x1,
         TUNNEL_1x2,
-        TUNNEL_2x2,
         HOLE,
         ABNORMAL_TUNNEL,
         LADDER_SHAFT
@@ -260,17 +259,8 @@ public class Tunnelers extends Module {
 
     private final Setting<SettingColor> colorAbnormalTunnels = sgAbnormal.add(new ColorSetting.Builder()
         .name("color-abnormal")
-        .description("Color for 3x3, 4x4, and 5x5 tunnels.")
+        .description("Color for 2x2, 3x3, 4x4, and 5x5 tunnels.")
         .defaultValue(new SettingColor(255, 0, 255, 75))
-        .visible(findAbnormalTunnels::get)
-        .build());
-
-    // ── 2x2 sub-settings (within Abnormal group) ─────────────────────────────
-
-    private final Setting<SettingColor> color2x2 = sgAbnormal.add(new ColorSetting.Builder()
-        .name("color-2x2")
-        .description("Color for 2x2 tunnels specifically.")
-        .defaultValue(new SettingColor(255, 165, 0, 75))
         .visible(findAbnormalTunnels::get)
         .build());
 
@@ -477,7 +467,6 @@ public class Tunnelers extends Module {
 
         filterTunnelTypeByLength(TunnelType.TUNNEL_1x1,      minLength1x1,      coordsByType, remaining);
         filterTunnelTypeByLength(TunnelType.TUNNEL_1x2,      minLength1x2,      coordsByType, remaining);
-        filterTunnelTypeByLength(TunnelType.TUNNEL_2x2,      minLengthAbnormal, coordsByType, remaining);
         filterTunnelTypeByLength(TunnelType.ABNORMAL_TUNNEL, minLengthAbnormal, coordsByType, remaining);
 
         List<MergedBox> boxes = new ArrayList<>();
@@ -505,10 +494,13 @@ public class Tunnelers extends Module {
                         for (int z = oz; z <= z2; z++)
                             rem.remove(pack(x, y, z));
 
-                double cx  = (ox + x2) * 0.5 + 0.5;
-                double cy  = (oy + y2) * 0.5 + 0.5;
-                double cz  = (oz + z2) * 0.5 + 0.5;
-                double ddx = cx - px, ddy = cy - py, ddz = cz - pz;
+                // Use distance to the nearest point on the box instead of the center.
+                // This prevents lengthy tunnels from vanishing when their center leaves the range.
+                double nearestX = Math.max(ox, Math.min(px, x2));
+                double nearestY = Math.max(oy, Math.min(py, y2));
+                double nearestZ = Math.max(oz, Math.min(pz, z2));
+                
+                double ddx = nearestX - px, ddy = nearestY - py, ddz = nearestZ - pz;
                 double distSq = Math.min(ddx * ddx + ddy * ddy + ddz * ddz, maxDistSq);
 
                 boxes.add(new MergedBox(ox, oy, oz, x2 + 1, y2 + 1, z2 + 1, type, distSq));
@@ -778,7 +770,7 @@ public class Tunnelers extends Module {
         }
         if (config.do2x2 && is2x2Tunnel(wx, wy, wz, ctx))
             for (int dx = 0; dx < 2; dx++) for (int dy = 1; dy <= 2; dy++) for (int dz = 0; dz < 2; dz++)
-                results.put(new BlockPos(wx + dx, wy + dy, wz + dz), TunnelType.TUNNEL_2x2);
+                results.put(new BlockPos(wx + dx, wy + dy, wz + dz), TunnelType.ABNORMAL_TUNNEL);
 
         if (config.doAbnormal) {
             int sz = getAbnormalTunnelSize(wx, wy, wz, ctx);
@@ -995,6 +987,11 @@ public class Tunnelers extends Module {
             spectralPulseMultiplier = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(System.currentTimeMillis() / 750.0 * Math.PI));
         }
 
+        // Current player pos for real-time distance reactive fading
+        double px = mc.player.getX();
+        double py = mc.player.getY();
+        double pz = mc.player.getZ();
+
         SettingColor reusable = new SettingColor(0, 0, 0, 0);
 
         int drawn = 0;
@@ -1004,10 +1001,17 @@ public class Tunnelers extends Module {
             SettingColor base = getColor(box.type);
             if (base == null) continue;
 
-            // Compute fade fraction (1.0 = close, 0.0 = at max range edge).
-            float fadeFrac = doFade
-                ? (float) Math.max(0.0, 1.0 - box.distSq / maxDistSq)
-                : 1.0f;
+            float fadeFrac = 1.0f;
+            if (doFade) {
+                // Recalculate distance to nearest point on-the-fly for smooth fading
+                double dx = px < box.x1 ? box.x1 - px : (px > box.x2 ? px - box.x2 : 0);
+                double dy = py < box.y1 ? box.y1 - py : (py > box.y2 ? py - box.y2 : 0);
+                double dz = pz < box.z1 ? box.z1 - pz : (pz > box.z2 ? pz - box.z2 : 0);
+                double currentDistSq = dx*dx + dy*dy + dz*dz;
+                
+                fadeFrac = (float) Math.max(0.0, 1.0 - currentDistSq / maxDistSq);
+                if (fadeFrac <= 0) continue; // Pure optimization: don't render if out of current range
+            }
 
             // Build the primary faded color used for the solid box fill / lines.
             int fadedA = Math.max(8, (int)(base.a * fadeFrac));
@@ -1087,7 +1091,6 @@ public class Tunnelers extends Module {
         return switch (type) {
             case TUNNEL_1x1      -> find1x1.get()            ? color1x1.get()             : null;
             case TUNNEL_1x2      -> find1x2.get()            ? color1x2.get()             : null;
-            case TUNNEL_2x2      -> findAbnormalTunnels.get() ? color2x2.get()             : null;
             case ABNORMAL_TUNNEL -> findAbnormalTunnels.get() ? colorAbnormalTunnels.get() : null;
             case HOLE            -> (sm == ShaftMode.Holes   || sm == ShaftMode.Both) ? colorHoles.get()        : null;
             case LADDER_SHAFT    -> (sm == ShaftMode.LadderShafts || sm == ShaftMode.Both) ? colorLadderShafts.get() : null;

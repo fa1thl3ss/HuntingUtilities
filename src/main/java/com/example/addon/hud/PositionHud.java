@@ -43,6 +43,12 @@ public class PositionHud extends HudElement {
 
     public enum Alignment { Left, Center, Right }
 
+    public enum CoordVisibility {
+        Visible,
+        Censored,
+        Hidden
+    }
+
     private final Setting<Alignment> alignment = sgGeneral.add(new EnumSetting.Builder<Alignment>()
         .name("alignment")
         .description("Align text to the left, center, or right.")
@@ -91,6 +97,13 @@ public class PositionHud extends HudElement {
     );
 
     // ── Feature toggles ───────────────────────────────────────────────────────────
+
+    private final Setting<CoordVisibility> coordVisibility = sgGeneral.add(new EnumSetting.Builder<CoordVisibility>()
+        .name("coord-visibility")
+        .description("Controls how coordinates are displayed.")
+        .defaultValue(CoordVisibility.Visible)
+        .build()
+    );
 
     private final Setting<Boolean> showDimension = sgGeneral.add(new BoolSetting.Builder()
         .name("show-dimension")
@@ -168,9 +181,11 @@ public class PositionHud extends HudElement {
         }
 
         // ── Coords ────────────────────────────────────────────────────────────────
-        String xLabel = "X: ", xVal = String.valueOf(bx);
-        String yLabel = "Y: ", yVal = String.valueOf(by);
-        String zLabel = "Z: ", zVal = String.valueOf(bz);
+        boolean coordsVisible = coordVisibility.get() != CoordVisibility.Hidden;
+        boolean censored = coordVisibility.get() == CoordVisibility.Censored;
+        String xLabel = "X: ", xVal = censored ? "XXXX" : String.valueOf(bx);
+        String yLabel = "Y: ", yVal = censored ? "XXXX" : String.valueOf(by);
+        String zLabel = "Z: ", zVal = censored ? "XXXX" : String.valueOf(bz);
 
         // ── Nether / OW equivalent ────────────────────────────────────────────────
         String netherLineLabel = null;
@@ -182,12 +197,12 @@ public class PositionHud extends HudElement {
                 // Nether → Overworld: multiply by 8
                 netherLineLabel = "OW: ";
                 nxVal = String.valueOf(bx * 8);
-                nzVal = String.valueOf(bz * 8);
+                nzVal = censored ? "XXXX" : String.valueOf(bz * 8);
             } else {
                 // Overworld → Nether: floor-divide to handle negatives correctly
                 netherLineLabel = "Nether: ";
-                nxVal = String.valueOf((int) Math.floor(bx / 8.0));
-                nzVal = String.valueOf((int) Math.floor(bz / 8.0));
+                nxVal = censored ? "XXXX" : String.valueOf((int) Math.floor(bx / 8.0));
+                nzVal = censored ? "XXXX" : String.valueOf((int) Math.floor(bz / 8.0));
             }
         }
 
@@ -222,7 +237,7 @@ public class PositionHud extends HudElement {
         double endNoteW = endNote != null
             ? renderer.textWidth(endNote, false, s) : 0;
 
-        // Always show coords line; count other lines
+        boolean hasCoords   = coordsVisible;
         boolean hasDim      = dimLabel    != null;
         boolean hasBiome    = biomeLabel  != null;
         boolean hasEndNote  = endNote     != null;
@@ -230,7 +245,7 @@ public class PositionHud extends HudElement {
         double maxW   = Math.max(coordW, Math.max(dimW, Math.max(biomeW, Math.max(netherW, endNoteW))));
         double totalW = maxW + padH * 2;
 
-        int lineCount = 1 // coords always present
+        int lineCount = (hasCoords ? 1 : 0)
             + (hasDim     ? 1 : 0)
             + (hasBiome   ? 1 : 0)
             + (hasLineNether ? 1 : 0)
@@ -255,7 +270,7 @@ public class PositionHud extends HudElement {
         }
 
         // ── Draw: Coords (X | Y | Z) ──────────────────────────────────────────────
-        {
+        if (hasCoords) {
             double rowY     = y + padV + lineIdx * (lineHeight + rowGap);
             double lineBoxW = coordW + padH * 2;
             if (showBackground.get()) {

@@ -64,6 +64,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
     private final SettingGroup sgGeneral   = settings.getDefaultGroup();
     private final SettingGroup sgFireworks = settings.createGroup("Firework Tracking");
     private final SettingGroup sgPearls    = settings.createGroup("Pearl Tracking");
+    private final SettingGroup sgLogouts   = settings.createGroup("Logout Tracking");
     private final SettingGroup sgItems     = settings.createGroup("Item Tracking");
     private final SettingGroup sgEntities  = settings.createGroup("Entity Tracking");
 
@@ -97,6 +98,23 @@ public class NeighbourhoodWatchHUD extends HudElement {
         .name("show-safety-status")
         .description("Show a warning when the disconnect-on-player safety feature is armed.")
         .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Boolean> showLogouts = sgLogouts.add(new BoolSetting.Builder()
+        .name("show-logouts")
+        .description("Show the list of recent logout spots.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> maxLogoutRows = sgLogouts.add(new IntSetting.Builder()
+        .name("max-logout-rows")
+        .description("Maximum number of logout spots to list.")
+        .defaultValue(5)
+        .min(1)
+        .sliderMax(20)
+        .visible(showLogouts::get)
         .build()
     );
 
@@ -867,6 +885,22 @@ public class NeighbourhoodWatchHUD extends HudElement {
             }
         }
 
+        // ── Gather logouts ────────────────────────────────────────────────────
+
+        List<NeighbourhoodWatch.LogoutRecord> logoutList = new ArrayList<>();
+        if (showLogouts.get() && moduleActive) {
+            String currentDim = mc.world.getRegistryKey().getValue().toString();
+            List<NeighbourhoodWatch.LogoutRecord> allLogouts = module.getLogouts();
+
+            for (int i = allLogouts.size() - 1; i >= 0; i--) {
+                NeighbourhoodWatch.LogoutRecord r = allLogouts.get(i);
+                if (r.dimension().equals(currentDim)) {
+                    logoutList.add(r);
+                    if (logoutList.size() >= maxLogoutRows.get()) break;
+                }
+            }
+        }
+
         // ── Safety armed? ─────────────────────────────────────────────────────
 
         boolean safetyArmed = moduleActive
@@ -882,9 +916,10 @@ public class NeighbourhoodWatchHUD extends HudElement {
         boolean hasPearlSection    = showPearls.get() && pearlCount > 0;
         boolean hasItemSection     = showItems.get() && itemCategory != null;
         boolean hasEntitySection   = !entityCategories.isEmpty();
+        boolean hasLogoutSection   = !logoutList.isEmpty();
         boolean hasSafetyLine      = safetyArmed;
 
-        if (!hasNearbySection && !hasFireworkSection && !hasOnlineSection
+        if (!hasNearbySection && !hasFireworkSection && !hasOnlineSection && !hasLogoutSection
                 && !hasPearlSection && !hasItemSection && !hasEntitySection && !hasSafetyLine) {
             setSize(0, 0);
             return;
@@ -1034,6 +1069,19 @@ public class NeighbourhoodWatchHUD extends HudElement {
             }
         }
 
+        // Logout widths
+        double[] logoutRowWidths = new double[logoutList.size()];
+        if (hasLogoutSection) {
+            for (int i = 0; i < logoutList.size(); i++) {
+                NeighbourhoodWatch.LogoutRecord r = logoutList.get(i);
+                long elapsed = (System.currentTimeMillis() - r.time()) / 1000;
+                String label = String.format("%s %s %s", r.name(), module.formatPos(r.pos()), formatTime(elapsed));
+                double w = renderer.textWidth(label, false, s);
+                logoutRowWidths[i] = w;
+                maxW = Math.max(maxW, w);
+            }
+        }
+
         double safetyW = 0;
         if (hasSafetyLine) {
             safetyW = renderer.textWidth("! Safety Armed", false, s);
@@ -1041,7 +1089,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
         }
 
         // ── Count total rows ──────────────────────────────────────────────────
-        // Order: Nearby → Online → Fireworks → Pearls → Items → Entities → Safety
+        // Order: Nearby → Online → Fireworks → Pearls → Logouts → Items → Entities → Safety
 
         int lineCount = 0;
         if (hasNearbySection) {
@@ -1061,6 +1109,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
             if (pDMode == EntityDisplayMode.Category) lineCount += 1;
             lineCount += 1; // single "Ender Pearl" entry row
         }
+        if (hasLogoutSection) lineCount += logoutList.size();
         if (hasItemSection) {
             if (iDMode == EntityDisplayMode.Category) lineCount += 1;
             lineCount += itemsShown.size();
@@ -1195,6 +1244,29 @@ public class NeighbourhoodWatchHUD extends HudElement {
             lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
                 "Nearby Pearls", cntStr, distStr, pearlRowW,
                 pearlColor.get(), pearlMetaColor.get(), lineIdx);
+        }
+
+        // ── Draw: Logout section ──────────────────────────────────────────────
+
+        if (hasLogoutSection) {
+            for (int i = 0; i < logoutList.size(); i++) {
+                NeighbourhoodWatch.LogoutRecord r = logoutList.get(i);
+                long elapsed = (System.currentTimeMillis() - r.time()) / 1000;
+                String timeStr = formatTime(elapsed);
+                String posStr = module.formatPos(r.pos());
+                String label = r.name();
+                
+                double rowW = logoutRowWidths[i];
+                double rowY = y + padV + lineIdx * (lineHeight + rowGap);
+
+                if (showBackground.get()) {
+                    double bgW = rowW + padH * 2;
+                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
+                }
+
+                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
+                    label, posStr, " " + timeStr, rowW, enemyColor.get(), labelColor.get(), lineIdx);
+            }
         }
 
         // ── Draw: Item section ────────────────────────────────────────────────
@@ -1342,6 +1414,12 @@ public class NeighbourhoodWatchHUD extends HudElement {
             renderer.text(distStr,  cx, rowY, metaColor, false, s);
         }
         return lineIdx + 1;
+    }
+
+    private String formatTime(long seconds) {
+        if (seconds < 60) return seconds + "s";
+        if (seconds < 3600) return (seconds / 60) + "m";
+        return (seconds / 3600) + "h " + ((seconds % 3600) / 60) + "m";
     }
 
     private double bgStartX(Alignment align, double totalW, double bgW) {
