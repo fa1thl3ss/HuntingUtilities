@@ -11,7 +11,7 @@ Modules List;
 - Graveyard
 - Handmold
 - Illushine
-- Iventory101
+- Inventory101
 - Lava Marker
 - Loot Lens
 - Mendbot
@@ -31,10 +31,13 @@ Hud List;
 - Dura Panel
 - Info Assistant
 - Loot Lens
+- Mobanom
 - Neighbourhood Watch
+- Portal Stock
 - Portal Tracker
 - Position
 - Rocket Pilot
+- Second Life
 - Server Report
 - Statistics Information
 - Time Throttle
