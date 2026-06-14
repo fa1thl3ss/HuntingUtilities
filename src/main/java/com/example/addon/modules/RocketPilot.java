@@ -2,6 +2,8 @@ package com.example.addon.modules;
 
 import com.example.addon.HuntingUtilities;
 
+import java.util.HashSet;
+import java.util.Set;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
@@ -26,6 +28,7 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
@@ -33,7 +36,7 @@ import net.minecraft.world.RaycastContext;
 public class RocketPilot extends Module {
 
     // ─── Enums ───────────────────────────────────────────────────────────────────
-    public enum FlightMode { Normal, Oscillation, Pitch40, AltitudeBounce }
+    public enum FlightMode { None, Normal, Oscillation, Pitch40, AltitudeBounce }
 
     public enum FlightPattern {
         Manual,
@@ -41,8 +44,8 @@ public class RocketPilot extends Module {
         Grid,
         Circle,
         ZigZag,
-        Lawnmower,
-        FigureEight
+        FigureEight,
+        Sweep
     }
 
     public enum DrunkBias { None, North, South, East, West, PositiveOnly, NegativeOnly, NegPos, PosNeg }
@@ -58,6 +61,7 @@ public class RocketPilot extends Module {
     private final SettingGroup sgPitch40      = settings.createGroup("Pitch40");
     private final SettingGroup sgOscillation  = settings.createGroup("Oscillation");
     private final SettingGroup sgBounce       = settings.createGroup("Altitude Bounce");
+    private final SettingGroup sgSweep        = settings.createGroup("Sweep Pattern");
     private final SettingGroup sgPatterns     = settings.createGroup("Patterns");
     private final SettingGroup sgDrunk        = settings.createGroup("DrunkPilot");
     private final SettingGroup sgFlightSafety = settings.createGroup("Flight Safety");
@@ -161,6 +165,7 @@ public class RocketPilot extends Module {
                 case Oscillation    -> info("Oscillation mode enabled.");
                 case Pitch40        -> info("Pitch40 mode enabled.");
                 case AltitudeBounce -> info("Altitude Bounce mode enabled.");
+                case None           -> info("Flight pitch control disabled.");
                 default             -> info("Normal flight mode enabled.");
             }
         })
@@ -214,6 +219,60 @@ public class RocketPilot extends Module {
         .min(1000)
         .sliderRange(1000, 10000)
         .visible(() -> flightMode.get() == FlightMode.Pitch40)
+        .build()
+    );
+
+    // ─── Pattern Settings ─────────────────────────────────────────────────────────
+    public final Setting<FlightPattern> flightPattern = sgPatterns.add(new EnumSetting.Builder<FlightPattern>()
+        .name("flight-pattern")
+        .description("The flight pattern to follow. Manual allows free mouse look.")
+        .defaultValue(FlightPattern.Manual)
+        .onChanged(v -> { if (isActive()) resetPatternState(); })
+        .build()
+    );
+
+    // ─── Sweep Pattern Settings ──────────────────────────────────────────────────
+    private final Setting<Integer> sweepWidth = sgSweep.add(new IntSetting.Builder()
+        .name("sweep-width")
+        .description("Total side-to-side distance in chunks.")
+        .defaultValue(10).min(1).sliderRange(1, 50)
+        .visible(() -> flightPattern.get() == FlightPattern.Sweep)
+        .build()
+    );
+
+    private final Setting<Integer> sweepAdvance = sgSweep.add(new IntSetting.Builder()
+        .name("sweep-advance")
+        .description("Forward distance moved per sweep in chunks.")
+        .defaultValue(2).min(1).sliderRange(1, 20)
+        .visible(() -> flightPattern.get() == FlightPattern.Sweep)
+        .build()
+    );
+
+    private final Setting<Double> sweepExpansionRate = sgSweep.add(new DoubleSetting.Builder()
+        .name("sweep-expansion-rate")
+        .description("Percentage increase in sweep width/advance per full cycle (e.g., 0.1 for 10% increase).")
+        .defaultValue(0.0)
+        .min(0.0).max(0.5)
+        .sliderRange(0.0, 0.2)
+        .visible(() -> flightPattern.get() == FlightPattern.Sweep)
+        .build()
+    );
+
+    private final Setting<Double> sweepMaxFactor = sgSweep.add(new DoubleSetting.Builder()
+        .name("sweep-max-factor")
+        .description("Maximum multiplier for sweep width/advance (e.g., 2.0 for double the initial size).")
+        .defaultValue(1.0)
+        .min(1.0).max(5.0)
+        .sliderRange(1.0, 3.0)
+        .visible(() -> flightPattern.get() == FlightPattern.Sweep && sweepExpansionRate.get() > 0.0)
+        .build()
+    );
+
+    private final Setting<Boolean> sweepAutoUpdate = sgSweep.add(new BoolSetting.Builder()
+        .name("auto-update-origin")
+        .description("Relocates the sweep pattern origin to your position if you manually fly too far from the current target.")
+        .defaultValue(true)
+        .visible(() -> flightPattern.get() == FlightPattern.Sweep)
         .build()
     );
 
@@ -297,14 +356,6 @@ public class RocketPilot extends Module {
     );
 
     // ─── Pattern Settings ─────────────────────────────────────────────────────────
-    public final Setting<FlightPattern> flightPattern = sgPatterns.add(new EnumSetting.Builder<FlightPattern>()
-        .name("flight-pattern")
-        .description("The flight pattern to follow. Manual allows free mouse look.")
-        .defaultValue(FlightPattern.Manual)
-        .onChanged(v -> { if (isActive()) resetPatternState(); })
-        .build()
-    );
-
     private final Setting<Keybind> pauseKey = sgPatterns.add(new KeybindSetting.Builder()
         .name("pause-key")
         .description("Pauses/resumes the current flight pattern.")
@@ -384,26 +435,6 @@ public class RocketPilot extends Module {
         .build()
     );
 
-    private final Setting<Integer> lawnmowerLegLength = sgPatterns.add(new IntSetting.Builder()
-        .name("lawnmower-leg-length")
-        .description("Length of each parallel leg in chunks.")
-        .defaultValue(10)
-        .min(1)
-        .sliderRange(1, 50)
-        .visible(() -> flightPattern.get() == FlightPattern.Lawnmower)
-        .build()
-    );
-
-    private final Setting<Integer> lawnmowerSpacing = sgPatterns.add(new IntSetting.Builder()
-        .name("lawnmower-spacing")
-        .description("Spacing between parallel legs in chunks.")
-        .defaultValue(2)
-        .min(1)
-        .sliderRange(1, 16)
-        .visible(() -> flightPattern.get() == FlightPattern.Lawnmower)
-        .build()
-    );
-
     private final Setting<Integer> figureEightRadius = sgPatterns.add(new IntSetting.Builder()
         .name("figure-eight-radius")
         .description("Radius of the loops in chunks.")
@@ -439,6 +470,14 @@ public class RocketPilot extends Module {
         .name("coordinate-bias")
         .description("Constrains drunk-pilot heading. None = fully random.")
         .defaultValue(DrunkBias.None)
+        .visible(() -> flightPattern.get() == FlightPattern.Drunk)
+        .build()
+    );
+
+    private final Setting<Boolean> drunkAvoidVisited = sgDrunk.add(new BoolSetting.Builder()
+        .name("avoid-visited")
+        .description("Attempts to steer the Drunk Pilot away from chunks it has already flown over.")
+        .defaultValue(true)
         .visible(() -> flightPattern.get() == FlightPattern.Drunk)
         .build()
     );
@@ -541,6 +580,7 @@ public class RocketPilot extends Module {
     public  long    lastRocketTime           = 0;
     private boolean needsTakeoffRocket       = false;
     private boolean ascentMode               = false;
+    private final Set<Long> drunkVisitedChunks = new HashSet<>();
     private boolean pitch40Climbing          = false;
     private boolean pitch40Rocketing         = false;
     private long    pitch40BelowMinStartTime = -1;
@@ -568,7 +608,9 @@ public class RocketPilot extends Module {
     private boolean zigzagTurnRight     = true;
     private boolean zigzagFirstLeg      = true;
     private double  circleAngle         = 0;
-    private int     lawnmowerWaypoint   = 0;
+    private int     sweepStep           = 0;
+    private double  currentSweepFactor  = 1.0;
+    private float   sweepInitialYaw     = 0;
     private int     figureEightWaypoint = 0;
 
     // ─── Constructor ─────────────────────────────────────────────────────────────
@@ -607,7 +649,10 @@ public class RocketPilot extends Module {
         zigzagTurnRight     = true;
         zigzagFirstLeg      = true;
         circleAngle         = 0;
-        lawnmowerWaypoint   = 0;
+        sweepStep           = 0;
+        currentSweepFactor  = 1.0;
+        sweepInitialYaw     = 0;
+        drunkVisitedChunks.clear();
         figureEightWaypoint = 0;
     }
 
@@ -628,6 +673,7 @@ public class RocketPilot extends Module {
         ceilingWarningSent       = false;
         takeoffTimer             = 0;
         takeoffWaitTicks         = 0;
+        drunkVisitedChunks.clear();
 
         resetPatternState();
 
@@ -757,6 +803,7 @@ public class RocketPilot extends Module {
                 case Pitch40        -> handlePitch40Mode();
                 case Oscillation    -> handleOscillationMode();
                 case AltitudeBounce -> handleAltitudeBounceMode();
+                case None           -> null;
                 default             -> handleNormalMode();
             };
         }
@@ -764,6 +811,7 @@ public class RocketPilot extends Module {
         if (!safetyOverride) {
             FlightPattern currentPattern = flightPattern.get();
             if (currentPattern == FlightPattern.Drunk) {
+                drunkVisitedChunks.add(mc.player.getChunkPos().toLong());
                 handleDrunkMode();
             } else if (currentPattern != FlightPattern.Manual) {
                 handlePatternYaw();
@@ -1044,8 +1092,16 @@ public class RocketPilot extends Module {
             if (currentTarget == null) {
                 calculateNextTarget();
             } else {
-                double dx     = currentTarget.x - mc.player.getX();
-                double dz     = currentTarget.z - mc.player.getZ();
+                double dx = currentTarget.x - mc.player.getX();
+                double dz = currentTarget.z - mc.player.getZ();
+
+                // If auto-update is enabled and we are more than 4 chunks away from the target,
+                // reset the pattern to follow the player's current location.
+                if (sweepAutoUpdate.get() && flightPattern.get() == FlightPattern.Sweep && (dx * dx + dz * dz) > 4096.0) {
+                    resetPatternState();
+                    return;
+                }
+
                 int    radius = waypointReachRadius.get();
                 if (dx * dx + dz * dz < (double)(radius * radius)) calculateNextTarget();
             }
@@ -1118,19 +1174,6 @@ public class RocketPilot extends Module {
             Vec3d startPoint = (currentTarget != null) ? currentTarget : origin;
             nextX = startPoint.x + (-Math.sin(radYaw) * legLength);
             nextZ = startPoint.z + ( Math.cos(radYaw) * legLength);
-        } else if (currentPattern == FlightPattern.Lawnmower) {
-            double legLength = lawnmowerLegLength.get() * 16.0;
-            double spacing   = lawnmowerSpacing.get() * 16.0;
-            int step = lawnmowerWaypoint % 4;
-            int row  = lawnmowerWaypoint / 4;
-            double zOffset = row * 2 * spacing;
-            switch (step) {
-                case 0: nextX = origin.x + legLength; nextZ = origin.z + zOffset;           break;
-                case 1: nextX = origin.x + legLength; nextZ = origin.z + zOffset + spacing; break;
-                case 2: nextX = origin.x;             nextZ = origin.z + zOffset + spacing; break;
-                default: nextX = origin.x;            nextZ = origin.z + zOffset + 2*spacing; break;
-            }
-            lawnmowerWaypoint++;
         } else if (currentPattern == FlightPattern.FigureEight) {
             double r = figureEightRadius.get() * 16.0;
             double x_off, z_off;
@@ -1155,6 +1198,38 @@ public class RocketPilot extends Module {
             nextX = origin.x + radius * Math.cos(circleAngle);
             nextZ = origin.z + radius * Math.sin(circleAngle);
             circleAngle += angleStep;
+        } else if (currentPattern == FlightPattern.Sweep) {
+            if (currentTarget == null) {
+                sweepInitialYaw = mc.player.getYaw();
+                sweepStep = 0;
+                currentSweepFactor = 1.0; // Reset on new pattern start
+            }
+
+            // Apply expansion after every full cycle (4 steps)
+            if (sweepExpansionRate.get() > 0.0 && sweepStep > 0 && sweepStep % 4 == 0) {
+                currentSweepFactor = Math.min(sweepMaxFactor.get(), currentSweepFactor * (1.0 + sweepExpansionRate.get()));
+            }
+
+            double width   = sweepWidth.get() * 16.0 * currentSweepFactor;
+            double advance = sweepAdvance.get() * 16.0 * currentSweepFactor;
+
+            float rad = (float) Math.toRadians(sweepInitialYaw);
+            Vec3d fwd  = new Vec3d(-Math.sin(rad), 0, Math.cos(rad));
+            Vec3d side = new Vec3d(-Math.cos(rad), 0, -Math.sin(rad)); // Right vector
+            Vec3d base = (currentTarget != null) ? currentTarget : origin;
+
+            Vec3d move;
+            switch (sweepStep % 4) {
+                case 0:  move = side.multiply(sweepStep == 0 ? -width : -width * 2.0); break; // Sweep Left
+                case 1:  move = fwd.multiply(advance); break; // Advance
+                case 2:  move = side.multiply(width * 2.0);  break; // Sweep Right
+                default: move = fwd.multiply(advance); break; // Advance
+            }
+
+            nextX = base.x + move.x;
+            nextZ = base.z + move.z;
+
+            sweepStep++;
         } else {
             return;
         }
@@ -1179,8 +1254,34 @@ public class RocketPilot extends Module {
             DrunkBias bias  = drunkBias.get();
 
             if (bias == DrunkBias.None) {
-                targetDrunkYaw = mc.player.getYaw()
-                    + (float)((Math.random() - 0.5) * 2.0 * intensity);
+                if (drunkAvoidVisited.get()) {
+                    float bestCandidate = mc.player.getYaw();
+
+                    // Try multiple random directions and pick one that doesn't point at a visited chunk
+                    for (int i = 0; i < 10; i++) {
+                        float candidate = mc.player.getYaw() + (float)((Math.random() - 0.5) * 2.0 * intensity);
+                        double rad = Math.toRadians(candidate);
+                        boolean pathVisited = false;
+
+                        // Check points roughly 1, 2, and 3 chunks ahead (16, 32, 48 blocks)
+                        for (int dist : new int[]{16, 32, 48}) {
+                            int cx = (int) Math.floor((mc.player.getX() - Math.sin(rad) * dist) / 16.0);
+                            int cz = (int) Math.floor((mc.player.getZ() + Math.cos(rad) * dist) / 16.0);
+                            if (drunkVisitedChunks.contains(ChunkPos.toLong(cx, cz))) {
+                                pathVisited = true;
+                                break;
+                            }
+                        }
+                        if (!pathVisited) {
+                            bestCandidate = candidate;
+                            break;
+                        }
+                        if (i == 0) bestCandidate = candidate; // Fallback to first random
+                    }
+                    targetDrunkYaw = bestCandidate;
+                } else {
+                    targetDrunkYaw = mc.player.getYaw() + (float)((Math.random() - 0.5) * 2.0 * intensity);
+                }
             } else {
                 float minYaw, maxYaw;
                 boolean isNorth = false;

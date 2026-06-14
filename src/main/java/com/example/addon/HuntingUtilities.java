@@ -3,6 +3,7 @@ package com.example.addon;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.addon.hud.DungeonAssistantHud;
 import com.example.addon.hud.DuraPanelHUD;
 import com.example.addon.hud.InfoAssistantHud;
 import com.example.addon.hud.LootLensHud;
@@ -59,38 +60,39 @@ public class HuntingUtilities extends MeteorAddon {
         modules.add(new ElytraAssistant());
         modules.add(new EndSafe());
         modules.add(new Graveyard());
-        modules.add(new Inventory101());
+        modules.add(new Handmold());
         modules.add(new Illushine());
+        modules.add(new Inventory101());
         modules.add(new LavaMarker());
         modules.add(new LootLens());
+        modules.add(new Mendbot());
+        modules.add(new Mobanom());
+        modules.add(new NeighbourhoodWatch());
+        modules.add(new PearlPulse());
         modules.add(new PortalMaker());
         modules.add(new PortalTracker());
         modules.add(new RocketPilot());
         modules.add(new ServerHealthcareSystem());
         modules.add(new SignScanner());
-        modules.add(new Timethrottle());
-        modules.add(new Mobanom());
-        modules.add(new NeighbourhoodWatch());
-        modules.add(new Tunnelers());
         modules.add(new ThirdSight());
-        modules.add(new Handmold());
-        modules.add(new Mendbot());
-        modules.add(new PearlPulse());
+        modules.add(new Timethrottle());
+        modules.add(new Tunnelers());
 
         // HUD elements
-        Hud.get().register(StatisticsInformation.INFO);
-        Hud.get().register(PortalTrackerHud.INFO);
-        Hud.get().register(PortalStockHud.INFO);
-        Hud.get().register(LootLensHud.INFO);
-        Hud.get().register(PositionHud.INFO);
-        Hud.get().register(RocketPilotHud.INFO);
+        Hud.get().register(DungeonAssistantHud.INFO);
+        Hud.get().register(DuraPanelHUD.INFO);
         Hud.get().register(InfoAssistantHud.INFO);
-        Hud.get().register(TimeThrottleHUD.INFO);
+        Hud.get().register(LootLensHud.INFO);
         Hud.get().register(MobanomHUD.INFO);
         Hud.get().register(NeighbourhoodWatchHUD.INFO);
-        Hud.get().register(DuraPanelHUD.INFO);
-        Hud.get().register(ServerReportHUD.INFO);
+        Hud.get().register(PortalStockHud.INFO);
+        Hud.get().register(PortalTrackerHud.INFO);
+        Hud.get().register(PositionHud.INFO);
+        Hud.get().register(RocketPilotHud.INFO);
         Hud.get().register(SecondLifeHUD.INFO);
+        Hud.get().register(ServerReportHUD.INFO);
+        Hud.get().register(StatisticsInformation.INFO);
+        Hud.get().register(TimeThrottleHUD.INFO);
     }
 
     @Override

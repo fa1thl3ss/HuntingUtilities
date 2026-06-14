@@ -3,6 +3,8 @@ package com.example.addon.modules;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.lwjgl.glfw.GLFW;
+
 import com.example.addon.HuntingUtilities;
 
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
@@ -13,9 +15,12 @@ import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
+import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.misc.input.Input;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
@@ -44,6 +49,10 @@ public class PortalMaker extends Module {
 
     public enum EntryMode {
         None, Walk, Pearl
+    }
+
+    private enum RecycleState {
+        IDLE, STEPPING_OUT, WAITING, RE_ENTERING
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -113,6 +122,51 @@ public class PortalMaker extends Module {
         .build()
     );
 
+    private final Setting<Boolean> autoRecycle = sgGeneral.add(new BoolSetting.Builder()
+        .name("auto-recycle")
+        .description("After changing dimension, automatically step out, wait, and go back in.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Boolean> cancelOnMovement = sgGeneral.add(new BoolSetting.Builder()
+        .name("cancel-on-movement")
+        .description("Cancels the recycle process if you manually press a movement key.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Keybind> disableKey = sgGeneral.add(new KeybindSetting.Builder()
+        .name("disable-key")
+        .description("Hotkey to quickly disable the module.")
+        .defaultValue(Keybind.none())
+        .action(() -> { if (isActive()) toggle(); })
+        .build()
+    );
+
+    private final Setting<Integer> recycleDelaySeconds = sgGeneral.add(new IntSetting.Builder()
+        .name("recycle-wait-time")
+        .description("How many seconds to wait before going back into the portal.")
+        .defaultValue(5).min(1).sliderMax(60)
+        .visible(autoRecycle::get)
+        .build()
+    );
+
+    private final Setting<Keybind> recycleKey = sgGeneral.add(new KeybindSetting.Builder()
+        .name("recycle-key")
+        .description("Manual keybind to trigger the recycle cycle (step out -> wait -> in).")
+        .defaultValue(Keybind.none())
+        .build()
+    );
+
+    private final Setting<Integer> dimensionSwitchCooldownTicks = sgGeneral.add(new IntSetting.Builder()
+        .name("dimension-switch-cooldown")
+        .description("Ticks to wait after a dimension change before resuming operations (e.g., recycling).")
+        .defaultValue(40)
+        .min(0).sliderMax(200)
+        .build()
+    );
+
     private final Setting<Integer> finishDelay = sgGeneral.add(new IntSetting.Builder()
         .name("finish-delay")
         .description("Ticks to wait after lighting the portal before turning off.")
@@ -154,6 +208,15 @@ public class PortalMaker extends Module {
     private int     tickTimer        = 0;
     private int     finishTimer      = 0;
     private boolean pearlThrown      = false;
+    private String  lastDimension    = "";
+    private String  builtDimension   = "";
+    private boolean portalLitDetected = false;
+    private int     dimensionChangeCooldown = 0;
+    private RecycleState recycleState = RecycleState.IDLE;
+    private Vec3d   recycleTarget    = null;
+    private Vec3d   stepOutTarget    = null;
+    private int     recycleWaitTimer = 0;
+    private boolean wasRecyclePressed = false;
     private final List<Vec3d> breadcrumbs = new ArrayList<>();
 
     /** Ticks the player has been roughly stationary while walking to portal. */
@@ -184,6 +247,12 @@ public class PortalMaker extends Module {
         lastPos          = null;
         scaffoldCooldown = 0;
         breadcrumbs.clear();
+        recycleState     = RecycleState.IDLE;
+        lastDimension    = "";
+        wasRecyclePressed = false;
+        builtDimension   = "";
+        portalLitDetected = false;
+        dimensionChangeCooldown = 0;
 
         if (mc.player == null || mc.world == null) { toggle(); return; }
 
@@ -241,6 +310,9 @@ public class PortalMaker extends Module {
             placementIndex = portalFramePositions.size();
         }
 
+        lastDimension = mc.world.getRegistryKey().getValue().toString();
+        builtDimension = lastDimension;
+
         selectHotbarItem(Items.OBSIDIAN);
         info("Building minimal Nether portal...");
     }
@@ -264,16 +336,87 @@ public class PortalMaker extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
 
+        // ── Manual Interruption ──
+        if (cancelOnMovement.get() && isMovingManually()) {
+            if (recycleState != RecycleState.IDLE || dimensionChangeCooldown > 0) {
+                info("Recycle cancelled by manual movement.");
+            }
+            toggle();
+            return;
+        }
+
+        // ── Dimension Change Detection ──
+        try { if (mc.world.getRegistryKey() == null) return; } catch (Exception ignored) { return; }
+        String currentDim = mc.world.getRegistryKey().getValue().toString();
+        if (builtDimension.isEmpty()) builtDimension = currentDim;
+
+        if (!currentDim.equals(lastDimension)) {
+            lastDimension = currentDim;
+            portalFramePositions.clear(); // The building task for the previous dimension is complete
+            if (autoRecycle.get()) {
+                // Grace period to allow the world and player state to stabilize after teleportation.
+                dimensionChangeCooldown = dimensionSwitchCooldownTicks.get();
+            }
+            return; // Wait for arrival state to stabilize before checking portal or building logic
+        }
+
+        if (dimensionChangeCooldown > 0) {
+            dimensionChangeCooldown--;
+            if (dimensionChangeCooldown == 0) {
+                startRecycle();
+            }
+            return;
+        }
+
+        // ── Manual Recycle Trigger ──
+        boolean recyclePressed = recycleKey.get().isPressed();
+        if (recyclePressed && !wasRecyclePressed) {
+            if (recycleState == RecycleState.IDLE) {
+                if (dimensionChangeCooldown > 0) info("Cannot recycle yet, waiting for dimension change cooldown.");
+                else startRecycle();
+            } else {
+                recycleState = RecycleState.IDLE;
+                stopMovement();
+                info("Recycle cancelled.");
+            }
+        }
+        wasRecyclePressed = recyclePressed;
+
+        // ── State Machine ──
+        if (recycleState != RecycleState.IDLE) {
+            handleRecycle();
+            return;
+        }
+
         if (isPlayerInPortal()) {
             stopMovement();
-            toggle();
+            // Keep the module on if we intend to recycle (automatically or via a manual keybind)
+            if (!autoRecycle.get() && !recycleKey.get().isSet() && recycleState == RecycleState.IDLE) {
+                toggle();
+            }
+            return;
+        }
+
+        if (isPortalLit()) portalLitDetected = true;
+
+        // ── Phase Guard ──
+        // If the portal is lit, or we are in a different dimension than where we started,
+        // we should never attempt to place obsidian.
+        if (portalLitDetected || !currentDim.equals(builtDimension)) {
+            if (currentDim.equals(builtDimension)) handlePhase2();
             return;
         }
 
         // Recalculate which blocks still need placing.
         placementIndex = portalFramePositions.size();
         for (int i = 0; i < portalFramePositions.size(); i++) {
-            if (mc.world.getBlockState(portalFramePositions.get(i)).getBlock() != Blocks.OBSIDIAN) {
+            BlockPos bp = portalFramePositions.get(i);
+            // Safety: if the chunk is not loaded (transition), assume obsidian is there to prevent false placement checks.
+            if (!mc.world.getChunkManager().isChunkLoaded(bp.getX() >> 4, bp.getZ() >> 4)) {
+                placementIndex = portalFramePositions.size();
+                break;
+            }
+            if (mc.world.getBlockState(bp).getBlock() != Blocks.OBSIDIAN) {
                 placementIndex = i;
                 break;
             }
@@ -281,6 +424,9 @@ public class PortalMaker extends Module {
 
         // ── Phase 1: place obsidian ────────────────────────────────────────────
         if (placementIndex < portalFramePositions.size()) {
+            // Safety: If inventory is desynced during transition, skip this tick.
+            if (mc.player.getInventory().main.isEmpty()) return;
+
             if (!mc.player.getMainHandStack().isOf(Items.OBSIDIAN)) {
                 FindItemResult obsidian = InvUtils.find(Items.OBSIDIAN);
                 if (!obsidian.found()) { error("No obsidian found → disabled."); toggle(); return; }
@@ -311,24 +457,126 @@ public class PortalMaker extends Module {
         }
 
         // ── Phase 2: light / enter ─────────────────────────────────────────────
-        if (isPortalLit()) {
-            if (entryMode.get() != EntryMode.None) {
-                moveToPortal();
-            } else {
-                if (finishTimer++ >= finishDelay.get()) {
-                    info("PortalMaker finished.");
+        handlePhase2();
+    }
+
+    private void handlePhase2() {
+        if (!portalLitDetected) {
+            finishTimer = 0;
+            if (tickTimer++ >= 10) { lightPortal(); tickTimer = 0; }
+            return;
+        }
+
+        if (entryMode.get() != EntryMode.None) {
+            moveToPortal();
+        } else {
+            if (finishTimer++ >= finishDelay.get()) {
+                info("PortalMaker finished.");
+                toggle();
+            }
+        }
+    }
+
+    private void handleRecycle() {
+        switch (recycleState) {
+            case STEPPING_OUT -> {
+                if (stepOutTarget == null) { recycleState = RecycleState.WAITING; return; }
+
+                double dist = mc.player.getPos().distanceTo(stepOutTarget);
+                if (dist < 0.3 || (dist < 1.2 && !isPlayerInPortal())) {
+                    stopMovement();
+                    recycleState = RecycleState.WAITING;
+                    return;
+                }
+                moveTo(stepOutTarget);
+            }
+            case WAITING -> {
+                if (recycleWaitTimer-- <= 0) {
+                    recycleState = RecycleState.RE_ENTERING;
+                    info("Wait complete. Re-entering portal...");
+                }
+            }
+            case RE_ENTERING -> {
+                moveTo(recycleTarget);
+                if (isPlayerInPortal()) {
+                    stopMovement();
                     toggle();
                 }
             }
-        } else {
-            finishTimer = 0;
-            if (tickTimer++ >= 10) { lightPortal(); tickTimer = 0; }
+            default -> {}
         }
+    }
+
+    private void startRecycle() {
+        setupRecycleTarget();
+        recycleState = RecycleState.STEPPING_OUT;
+        recycleWaitTimer = recycleDelaySeconds.get() * 20;
+        info("Initiating portal recycle...");
+    }
+
+    private void setupRecycleTarget() {
+        BlockPos pos = mc.player.getBlockPos();
+        // Verify if we are in a portal, or look for the nearest one.
+        if (!mc.world.getBlockState(pos).isOf(Blocks.NETHER_PORTAL)) {
+            for (BlockPos p : BlockPos.iterate(pos.add(-5, -3, -5), pos.add(5, 3, 5))) {
+                if (mc.world.getBlockState(p).isOf(Blocks.NETHER_PORTAL)) {
+                    pos = p;
+                    break;
+                }
+            }
+        }
+
+        if (mc.world.getBlockState(pos).isOf(Blocks.NETHER_PORTAL)) {
+            // Identify axis and find center.
+            BlockState state = mc.world.getBlockState(pos);
+            Direction.Axis axis = state.contains(net.minecraft.state.property.Properties.HORIZONTAL_AXIS) 
+                ? state.get(net.minecraft.state.property.Properties.HORIZONTAL_AXIS) 
+                : Direction.Axis.X;
+
+            int minC = axis == Direction.Axis.X ? pos.getX() : pos.getZ();
+            int maxC = minC;
+
+            while (mc.world.getBlockState(axis == Direction.Axis.X ? new BlockPos(minC - 1, pos.getY(), pos.getZ()) : new BlockPos(pos.getX(), pos.getY(), minC - 1)).isOf(Blocks.NETHER_PORTAL)) minC--;
+            while (mc.world.getBlockState(axis == Direction.Axis.X ? new BlockPos(maxC + 1, pos.getY(), pos.getZ()) : new BlockPos(pos.getX(), pos.getY(), maxC + 1)).isOf(Blocks.NETHER_PORTAL)) maxC++;
+
+            double mid = (minC + maxC + 1) / 2.0;
+            if (axis == Direction.Axis.X) {
+                recycleTarget = new Vec3d(mid, pos.getY(), pos.getZ() + 0.5);
+                // Check Z offsets for a clear spot to step out to
+                Vec3d o1 = recycleTarget.add(0, 0, 2.0);
+                Vec3d o2 = recycleTarget.add(0, 0, -2.0);
+                if (isAreaClear(o1)) stepOutTarget = o1;
+                else if (isAreaClear(o2)) stepOutTarget = o2;
+                else stepOutTarget = o1;
+            } else {
+                recycleTarget = new Vec3d(pos.getX() + 0.5, pos.getY(), mid);
+                // Check X offsets for a clear spot to step out to
+                Vec3d o1 = recycleTarget.add(2.0, 0, 0);
+                Vec3d o2 = recycleTarget.add(-2.0, 0, 0);
+                if (isAreaClear(o1)) stepOutTarget = o1;
+                else if (isAreaClear(o2)) stepOutTarget = o2;
+                else stepOutTarget = o1;
+            }
+        } else {
+            recycleTarget = mc.player.getPos();
+            stepOutTarget = mc.player.getPos().add(mc.player.getRotationVector().multiply(-2.0));
+        }
+    }
+
+    private boolean isAreaClear(Vec3d pos) {
+        BlockPos bp = BlockPos.ofFloored(pos);
+        return mc.world.getBlockState(bp).isReplaceable() && mc.world.getBlockState(bp.up()).isReplaceable();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Portal Logic
     // ═══════════════════════════════════════════════════════════════════════════
+
+    private boolean isPlayerInPortal() {
+        BlockPos feet = mc.player.getBlockPos();
+        return mc.world.getBlockState(feet).isOf(Blocks.NETHER_PORTAL) ||
+               mc.world.getBlockState(feet.up()).isOf(Blocks.NETHER_PORTAL);
+    }
 
     private void lightPortal() {
         if (portalFramePositions.isEmpty()) return;
@@ -353,14 +601,16 @@ public class PortalMaker extends Module {
         if (portalFramePositions.size() < 2) return false;
         BlockPos p1 = portalFramePositions.get(0).up();
         BlockPos p2 = portalFramePositions.get(1).up();
+
+        // Safety: If chunks are unloading during dimension switch, assume the previous state
+        // to prevent the module from trying to light "air" in the middle of a transition.
+        if (!mc.world.getChunkManager().isChunkLoaded(p1.getX() >> 4, p1.getZ() >> 4) ||
+            !mc.world.getChunkManager().isChunkLoaded(p2.getX() >> 4, p2.getZ() >> 4)) {
+            return portalLitDetected;
+        }
+
         return mc.world.getBlockState(p1).getBlock() == Blocks.NETHER_PORTAL ||
                mc.world.getBlockState(p2).getBlock() == Blocks.NETHER_PORTAL;
-    }
-
-    private boolean isPlayerInPortal() {
-        BlockPos feet = mc.player.getBlockPos();
-        return mc.world.getBlockState(feet).isOf(Blocks.NETHER_PORTAL) ||
-               mc.world.getBlockState(feet.up()).isOf(Blocks.NETHER_PORTAL);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -368,12 +618,17 @@ public class PortalMaker extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void moveToPortal() {
-        if (portalFramePositions.size() < 2 || mc.player == null || mc.world == null) return;
+        if (portalFramePositions.size() < 2) return;
+        moveTo(getPortalOpeningCenter());
+    }
+
+    private void moveTo(Vec3d target) {
+        if (mc.player == null || mc.world == null || target == null) return;
 
         // 1. Ender pearl fast-path
         if (entryMode.get() == EntryMode.Pearl) {
-            if (!pearlThrown && selectHotbarItem(Items.ENDER_PEARL)) {
-                Vec3d center = getPortalOpeningCenter().add(0, 0.5, 0);
+            if (!pearlThrown && recycleState == RecycleState.IDLE && selectHotbarItem(Items.ENDER_PEARL)) {
+                Vec3d center = target.add(0, 0.5, 0);
                 Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
                     mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                     mc.player.swingHand(Hand.MAIN_HAND);
@@ -383,7 +638,6 @@ public class PortalMaker extends Module {
             return;
         }
 
-        Vec3d target = getPortalOpeningCenter();
         Vec3d playerPos = mc.player.getPos();
 
         // 2. Safety Guards
@@ -391,11 +645,6 @@ public class PortalMaker extends Module {
             error("Fell too far below the portal — stopping.");
             stopMovement();
             toggle();
-            return;
-        }
-
-        if (isPlayerInPortal()) {
-            stopMovement();
             return;
         }
 
@@ -430,7 +679,7 @@ public class PortalMaker extends Module {
 
         stopMovement(); // Reset keys for clean state
 
-        if (hDist > 0.05) {
+        if (hDist > 0.02) {
             Direction dir = directionFromVector(dx, dz);
             BlockPos playerFeet = mc.player.getBlockPos();
             BlockPos footPos = playerFeet.offset(dir);
@@ -709,5 +958,16 @@ public class PortalMaker extends Module {
 
     private boolean hasItem(Item targetItem) {
         return countItem(targetItem) > 0;
+    }
+
+    private boolean isMovingManually() {
+        if (mc.currentScreen != null) return false;
+        return Input.isKeyPressed(GLFW.GLFW_KEY_W) || 
+               Input.isKeyPressed(GLFW.GLFW_KEY_A) ||
+               Input.isKeyPressed(GLFW.GLFW_KEY_S) || 
+               Input.isKeyPressed(GLFW.GLFW_KEY_D) ||
+               Input.isKeyPressed(GLFW.GLFW_KEY_SPACE) || 
+               Input.isKeyPressed(GLFW.GLFW_KEY_LEFT_SHIFT) ||
+               Input.isKeyPressed(GLFW.GLFW_KEY_RIGHT_SHIFT);
     }
 }

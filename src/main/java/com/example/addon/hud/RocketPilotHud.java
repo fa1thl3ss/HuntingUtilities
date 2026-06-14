@@ -12,11 +12,11 @@ import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
-import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.EquipmentSlot;
@@ -319,13 +319,13 @@ public class RocketPilotHud extends HudElement {
             : 0;
 
         // Elytra
+        int elytraCount = countElytras();
         ItemStack    elytraStack = ItemStack.EMPTY;
         String       durLabel = null, durValue = null;
         SettingColor durColor = valueColor.get();
-        if (showDurability.get()) {
-            int count = countElytras();
+        if (showDurability.get() && (elytraCount > 0 || isInEditor())) {
             durLabel = showText ? "Elytras: " : "";
-            durValue = String.valueOf(count);
+            durValue = String.valueOf(elytraCount);
 
             // Find a valid elytra to show as icon
             double threshold = elytraDurabilityThreshold.get();
@@ -338,17 +338,17 @@ public class RocketPilotHud extends HudElement {
             }
             if (elytraStack.isEmpty()) elytraStack = new ItemStack(Items.ELYTRA);
 
-            if      (count <= elytraCriticalCount.get()) durColor = elytraCriticalColor.get();
-            else if (count <= elytraWarningCount.get())  durColor = elytraWarningColor.get();
+            if      (elytraCount <= elytraCriticalCount.get()) durColor = elytraCriticalColor.get();
+            else if (elytraCount <= elytraWarningCount.get())  durColor = elytraWarningColor.get();
         }
 
         // Rockets
+        int currentRockets = countRockets();
         ItemStack    rocketStack = ItemStack.EMPTY;
         String       rocketLabel = null, rocketValue = null;
         SettingColor rocketColor = valueColor.get();
-        int currentRockets = countRockets();
 
-        if (showRocketCount.get() || showFlightTime.get()) {
+        if ((showRocketCount.get() || showFlightTime.get()) && (currentRockets > 0 || isInEditor())) {
             String name = "Firework Rocket";
             for (int i = 0; i < 36; i++) {
                 ItemStack s2 = mc.player.getInventory().getStack(i);
@@ -372,7 +372,7 @@ public class RocketPilotHud extends HudElement {
         double efficiency = 1.0;
         SettingColor distColor = valueColor.get();
 
-        if ((showFlightTime.get() || showDistance.get()) && rp.isActive()) {
+        if ((showFlightTime.get() || showDistance.get()) && rp.isActive() && (currentRockets > 0 || isInEditor())) {
             boolean moving = mc.player.getVelocity().lengthSquared() > 0.0001;
 
             if (!hideTimeWhenStatic.get() || moving) {

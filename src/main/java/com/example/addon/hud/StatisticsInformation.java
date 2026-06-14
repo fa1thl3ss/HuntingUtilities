@@ -64,6 +64,19 @@ public class StatisticsInformation extends HudElement {
         .build()
     );
 
+    // Coordinates
+    public enum CoordinateDisplay {
+        Show,
+        Hidden
+    }
+
+    private final Setting<CoordinateDisplay> coordinateDisplay = sgGeneral.add(new EnumSetting.Builder<CoordinateDisplay>()
+        .name("coordinates")
+        .description("Whether to show your current coordinates.")
+        .defaultValue(CoordinateDisplay.Hidden)
+        .build()
+    );
+
     // Direction
     private final Setting<Boolean> showDirection = sgGeneral.add(new BoolSetting.Builder()
         .name("show-direction")
@@ -352,6 +365,13 @@ public class StatisticsInformation extends HudElement {
             };
         }
 
+        // ── Line 9: Coordinates ───────────────────────────────────────────────────
+        String coordsLabel = null, coordsValue = null;
+        if (coordinateDisplay.get() == CoordinateDisplay.Show && mc.player != null) {
+            coordsLabel = "Pos: ";
+            coordsValue = String.format("%d, %d, %d", (int) mc.player.getX(), (int) mc.player.getY(), (int) mc.player.getZ());
+        }
+
         // ── Line 4: Memory ────────────────────────────────────────────────────────
         String memLabel = null, memValue = null;
         SettingColor memColor = valueColor.get();
@@ -435,13 +455,14 @@ public class StatisticsInformation extends HudElement {
         }
 
         // ── Measure all line widths ───────────────────────────────────────────────
-        double line1W = 0, line2W = 0, line3W = 0, line4W = 0, line5W = 0, line6W = 0, line7W = 0, line8W = 0, line10W = 0;
+        double line1W = 0, line2W = 0, line3W = 0, line4W = 0, line5W = 0, line6W = 0, line7W = 0, line8W = 0, line9W = 0, line10W = 0;
 
         if (speedLabel  != null) line1W = renderer.textWidth(speedLabel,  false, s) + renderer.textWidth(speedValue,  false, s);
         if (fpsLabel    != null) line2W += renderer.textWidth(fpsLabel,   false, s) + renderer.textWidth(fpsValue,   false, s);
         if (fpsLabel    != null && tpsLabel != null) line2W += sepW;
         if (tpsLabel    != null) line2W += renderer.textWidth(tpsLabel,   false, s) + renderer.textWidth(tpsValue,   false, s);
         if (dirLabel    != null) line3W = renderer.textWidth(dirLabel,    false, s) + renderer.textWidth(dirValue,   false, s);
+        if (coordsLabel != null) line9W = renderer.textWidth(coordsLabel, false, s) + renderer.textWidth(coordsValue, false, s);
         if (memLabel    != null) line4W = renderer.textWidth(memLabel,    false, s) + renderer.textWidth(memValue,   false, s);
         if (chunkLabel  != null) line5W += renderer.textWidth(chunkLabel, false, s) + renderer.textWidth(chunkValue, false, s);
         if (chunkLabel  != null && playerLabel != null) line5W += sepW;
@@ -454,6 +475,7 @@ public class StatisticsInformation extends HudElement {
         boolean hasLine1 = speedLabel  != null;
         boolean hasLine2 = fpsLabel    != null || tpsLabel    != null;
         boolean hasLine3 = dirLabel    != null;
+        boolean hasLine9 = coordsLabel != null;
         boolean hasLine4 = memLabel    != null;
         boolean hasLine5 = chunkLabel  != null || playerLabel != null;
         boolean hasLine6 = distLabel   != null;
@@ -461,15 +483,15 @@ public class StatisticsInformation extends HudElement {
         boolean hasLine8 = stabLabel   != null;
         boolean hasLine10 = guardLabel != null;
 
-        if (!hasLine1 && !hasLine2 && !hasLine3 && !hasLine4 && !hasLine5 && !hasLine6 && !hasLine7 && !hasLine8 && !hasLine10) {
+        if (!hasLine1 && !hasLine2 && !hasLine3 && !hasLine4 && !hasLine5 && !hasLine6 && !hasLine7 && !hasLine8 && !hasLine9 && !hasLine10) {
             setSize(0, 0); return;
         }
 
         double maxLineW  = Math.max(line1W, Math.max(line2W, Math.max(line3W, Math.max(line4W,
-                           Math.max(line5W, Math.max(line6W, Math.max(line7W, Math.max(line8W, line10W))))))));
+                           Math.max(line5W, Math.max(line6W, Math.max(line7W, Math.max(line8W, Math.max(line9W, line10W)))))))));
         double totalW    = maxLineW + padH * 2;
         int    lineCount = (hasLine1 ? 1 : 0) + (hasLine2 ? 1 : 0) + (hasLine3 ? 1 : 0)
-                         + (hasLine4 ? 1 : 0) + (hasLine5 ? 1 : 0) + (hasLine6 ? 1 : 0)
+                         + (hasLine4 ? 1 : 0) + (hasLine5 ? 1 : 0) + (hasLine6 ? 1 : 0) + (hasLine9 ? 1 : 0)
                          + (hasLine7 ? 1 : 0) + (hasLine8 ? 1 : 0) + (hasLine10 ? 1 : 0);
         double totalH    = lineCount * lineHeight + (lineCount - 1) * rowGap + padV * 2;
 
@@ -484,6 +506,9 @@ public class StatisticsInformation extends HudElement {
 
         if (hasLine3) lineIdx = drawLabelValue(renderer, s, padH, padV, rowGap, lineHeight,
             rightAlign, totalW, line3W, lineIdx, dirLabel, dirValue, labelColor.get(), valueColor.get());
+
+        if (hasLine9) lineIdx = drawLabelValue(renderer, s, padH, padV, rowGap, lineHeight,
+            rightAlign, totalW, line9W, lineIdx, coordsLabel, coordsValue, labelColor.get(), valueColor.get());
 
         if (hasLine4) lineIdx = drawLabelValue(renderer, s, padH, padV, rowGap, lineHeight,
             rightAlign, totalW, line4W, lineIdx, memLabel, memValue, labelColor.get(), memColor);

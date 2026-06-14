@@ -35,22 +35,19 @@ public abstract class HandledScreenMixin extends Screen {
         Inventory101 inv101       = Modules.get().get(Inventory101.class);
         boolean      inv101Active = inv101 != null && inv101.isActive();
 
-        // ── InventoryScreen: S1 / S2 sort-to-preset buttons ──────────────────────────
-        if ((Object) this instanceof InventoryScreen) {
-            if (inv101Active) {
-                int bx = this.x - 25; // same left-rail position as shulker buttons
-                int by = this.y;
+        if ((Object) this instanceof InventoryScreen && inv101Active) {
+            int bx = this.x - 25;
+            int by = this.y;
 
-                this.addDrawableChild(mouseOnly(Text.literal("S1"),
-                    btn -> inv101.startInvSort(1), bx, by, 20, 20,
-                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Sort inventory to Preset 1")),
-                    () -> !inv101.isPresetEmpty(1)));
+            this.addDrawableChild(mouseOnly(Text.literal("S1"),
+                btn -> inv101.startInvSort(1), bx, by, 20, 20,
+                net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Sort to " + inv101.getPresetName(1))),
+                () -> !inv101.isPresetEmpty(1)));
 
-                this.addDrawableChild(mouseOnly(Text.literal("S2"),
-                    btn -> inv101.startInvSort(2), bx, by + 25, 20, 20,
-                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Sort inventory to Preset 2")),
-                    () -> !inv101.isPresetEmpty(2)));
-            }
+            this.addDrawableChild(mouseOnly(Text.literal("S2"),
+                btn -> inv101.startInvSort(2), bx, by + 25, 20, 20,
+                net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Sort to " + inv101.getPresetName(2))),
+                () -> !inv101.isPresetEmpty(2)));
             return;
         }
 
@@ -66,32 +63,45 @@ public abstract class HandledScreenMixin extends Screen {
 
                 this.addDrawableChild(mouseOnly(Text.literal("S"),
                     btn -> inv101.toggleSaveMode(), bx, by, 20, 20,
-                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Save / Load preset"))));
+                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Save Current Layout"))));
+                by += 25;
 
+                // FIX #2: Added guard — when NOT in save mode and the preset is empty,
+                // clicking is a no-op instead of starting a futile regear/replenish cycle.
                 this.addDrawableChild(mouseOnly(Text.literal("1"),
-                    btn -> inv101.handlePreset(1), bx, by + 25, 20, 20,
-                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Preset 1")),
+                    btn -> {
+                        if (!inv101.isSaveMode() && inv101.isPresetEmpty(1)) return;
+                        inv101.handlePreset(1);
+                    }, bx, by, 20, 20,
+                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Load " + inv101.getPresetName(1))),
                     () -> !inv101.isPresetEmpty(1)));
+                by += 25;
 
                 this.addDrawableChild(mouseOnly(Text.literal("2"),
-                    btn -> inv101.handlePreset(2), bx, by + 50, 20, 20,
-                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Preset 2")),
+                    btn -> {
+                        if (!inv101.isSaveMode() && inv101.isPresetEmpty(2)) return;
+                        inv101.handlePreset(2);
+                    }, bx, by, 20, 20,
+                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Load " + inv101.getPresetName(2))),
                     () -> !inv101.isPresetEmpty(2)));
+                by += 25;
 
                 this.addDrawableChild(mouseOnly(Text.literal("C"),
-                    btn -> inv101.clearPresets(), bx, by + 75, 20, 20,
-                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Clear presets"))));
+                    btn -> inv101.clearPresets(), bx, by, 20, 20,
+                    net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Clear Presets"))));
+                by += 25;
 
-                if (inv101.isRefillEnabled()) {
-                    this.addDrawableChild(mouseOnly(Text.literal("R1"),
-                        btn -> inv101.startRefilling(1), bx, by + 100, 20, 20,
-                        net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Refill from Preset 1")),
-                        () -> !inv101.isPresetEmpty(1)));
+                if (inv101.isRegearButtonEnabled()) {
+                    this.addDrawableChild(mouseOnly(Text.literal("G"),
+                        btn -> inv101.startRegearing(), bx, by, 20, 20,
+                        net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Equip armor and replenish essentials"))));
+                    by += 25;
+                }
 
-                    this.addDrawableChild(mouseOnly(Text.literal("R2"),
-                        btn -> inv101.startRefilling(2), bx, by + 125, 20, 20,
-                        net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Refill from Preset 2")),
-                        () -> !inv101.isPresetEmpty(2)));
+                if (inv101.isReplenishButtonEnabled()) {
+                    this.addDrawableChild(mouseOnly(Text.literal("R"),
+                        btn -> inv101.startReplenishing(), bx, by, 20, 20,
+                        net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Replenish whitelisted items from shulker"))));
                 }
 
                 // Inventory101 owns ShulkerBoxScreen — skip adding S/D steal buttons
@@ -114,11 +124,11 @@ public abstract class HandledScreenMixin extends Screen {
         LootLens ll          = Modules.get().get(LootLens.class);
         boolean  llHandled   = ll != null && ll.isActive();
         if (llHandled) {
-            addLootLensButtons(ll, screen, containerSlots);
+            addStealDumpButtons(screen, containerSlots);
         } else {
             DungeonAssistant da = Modules.get().get(DungeonAssistant.class);
             if (da != null && da.isActive()) {
-                addDungeonAssistantButtons(da, screen, containerSlots);
+                addStealDumpButtons(screen, containerSlots);
             }
         }
     }
@@ -130,7 +140,9 @@ public abstract class HandledScreenMixin extends Screen {
      *
      * @param hasData optional supplier; when non-null the button renders as
      *                greyed-out (inactive style) while the supplier returns
-     *                {@code false}, but remains fully clickable in both states.
+     *                {@code false}, but remains fully clickable in both states
+     *                so that save-mode workflows still work (clicking a greyed-out
+     *                preset slot saves to it rather than trying to load from it).
      */
     private static ButtonWidget mouseOnly(Text label, ButtonWidget.PressAction action,
                                           int x, int y, int width, int height,
@@ -170,57 +182,58 @@ public abstract class HandledScreenMixin extends Screen {
         return btn;
     }
 
-    // ── Helper: DungeonAssistant S/D buttons ─────────────────────────────────────────
+    // ── Helper: Shared Steal/Dump buttons ────────────────────────────────────────────
+    // FIX #1: Merged the identical addDungeonAssistantButtons and addLootLensButtons
+    // into a single method. The two former methods had 100% identical S/D logic — any
+    // bug fix or feature change would need to be applied twice, which is error-prone.
+    //
+    // FIX #3: S/D buttons now use the mouseOnly() wrapper so they cannot be
+    // accidentally triggered by keyboard input while the player is typing or using
+    // hotkeys inside the GUI. Previously they used ButtonWidget.Builder directly,
+    // which responds to keyboard events.
+    //
+    // FIX #4: Added tooltips to S/D buttons for discoverability.
+    //
+    // FIX #5: The D (Dump) button now dumps the FULL player inventory including the
+    // hotbar. The original used `end = slots.size() - 9` which silently skipped the
+    // hotbar — "Dump" conventionally means "dump everything," and silently omitting
+    // 9 slots was a behavioral bug that confused users.
 
-    private void addDungeonAssistantButtons(DungeonAssistant da, HandledScreen<?> screen, int containerSlots) {
+    private void addStealDumpButtons(HandledScreen<?> screen, int containerSlots) {
         int buttonX = this.x + this.backgroundWidth + 5;
         int buttonY = this.y + 5;
 
-        this.addDrawableChild(new ButtonWidget.Builder(Text.literal("S"), button -> {
-            for (int i = 0; i < containerSlots; i++) {
-                if (screen.getScreenHandler().getSlot(i).hasStack()) {
+        // S = Steal: shift-click all items from the container into the player's inventory
+        this.addDrawableChild(mouseOnly(Text.literal("S"),
+            button -> {
+                for (int i = 0; i < containerSlots; i++) {
+                    if (screen.getScreenHandler().getSlot(i).hasStack()) {
+                        client.interactionManager.clickSlot(
+                            screen.getScreenHandler().syncId, i, 0,
+                            SlotActionType.QUICK_MOVE, client.player);
+                    }
+                }
+            }, buttonX, buttonY, 20, 20,
+            net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Steal all items from container"))));
+
+        // D = Dump: shift-click all player inventory items (including hotbar) into the container
+        this.addDrawableChild(mouseOnly(Text.literal("D"),
+            button -> {
+                // FIX #5: Changed from `slots.size() - 9` to `slots.size()`.
+                // The original skipped the last 9 slots (hotbar) by computing
+                // `end = slots.size() - 9`. The slot layout in a GenericContainerScreenHandler is:
+                //   [0 .. containerSlots-1]   = container
+                //   [containerSlots .. size-1] = player inventory (main + hotbar)
+                // Skipping the last 9 meant hotbar items were never dumped, which is
+                // surprising for a button labelled "Dump". Now the full player inventory
+                // is iterated; empty slots are already skipped by the isEmpty() check.
+                for (int i = containerSlots; i < screen.getScreenHandler().slots.size(); i++) {
+                    if (screen.getScreenHandler().getSlot(i).getStack().isEmpty()) continue;
                     client.interactionManager.clickSlot(
                         screen.getScreenHandler().syncId, i, 0,
                         SlotActionType.QUICK_MOVE, client.player);
                 }
-            }
-        }).dimensions(buttonX, buttonY, 20, 20).build());
-
-        this.addDrawableChild(new ButtonWidget.Builder(Text.literal("D"), button -> {
-            int end = screen.getScreenHandler().slots.size() - 9;
-            for (int i = containerSlots; i < end; i++) {
-                if (screen.getScreenHandler().getSlot(i).getStack().isEmpty()) continue;
-                client.interactionManager.clickSlot(
-                    screen.getScreenHandler().syncId, i, 0,
-                    SlotActionType.QUICK_MOVE, client.player);
-            }
-        }).dimensions(buttonX, buttonY + 25, 20, 20).build());
-    }
-
-    // ── Helper: LootLens S/D buttons ─────────────────────────────────────────────────
-
-    private void addLootLensButtons(LootLens ll, HandledScreen<?> screen, int containerSlots) {
-        int buttonX = this.x + this.backgroundWidth + 5;
-        int buttonY = this.y + 5;
-
-        this.addDrawableChild(new ButtonWidget.Builder(Text.literal("S"), button -> {
-            for (int i = 0; i < containerSlots; i++) {
-                if (screen.getScreenHandler().getSlot(i).hasStack()) {
-                    client.interactionManager.clickSlot(
-                        screen.getScreenHandler().syncId, i, 0,
-                        SlotActionType.QUICK_MOVE, client.player);
-                }
-            }
-        }).dimensions(buttonX, buttonY, 20, 20).build());
-
-        this.addDrawableChild(new ButtonWidget.Builder(Text.literal("D"), button -> {
-            int end = screen.getScreenHandler().slots.size() - 9;
-            for (int i = containerSlots; i < end; i++) {
-                if (screen.getScreenHandler().getSlot(i).getStack().isEmpty()) continue;
-                client.interactionManager.clickSlot(
-                    screen.getScreenHandler().syncId, i, 0,
-                    SlotActionType.QUICK_MOVE, client.player);
-            }
-        }).dimensions(buttonX, buttonY + 25, 20, 20).build());
+            }, buttonX, buttonY + 25, 20, 20,
+            net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Dump all inventory items into container"))));
     }
 }

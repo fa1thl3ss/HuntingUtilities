@@ -18,8 +18,8 @@ import java.util.List;
 
 public class PortalStockHud extends HudElement {
     public static final HudElementInfo<PortalStockHud> INFO = new HudElementInfo<>(
-        HuntingUtilities.HUD_GROUP, "portal-stock",
-        "portal-stock",
+        HuntingUtilities.HUD_GROUP, "Portal Stock",
+        "Portal Stock",
         "Displays obsidian count in inventory and portal frame progress.",
         PortalStockHud::new
     );

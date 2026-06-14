@@ -16,17 +16,22 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.gui.screen.DeathScreen;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.block.BedBlock;
+import net.minecraft.block.BlockState;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.AttributeModifiersComponent;
 import net.minecraft.component.type.ItemEnchantmentsComponent;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.Enchantments;
 import net.minecraft.entity.EquipmentSlot;
+import net.minecraft.item.AxeItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -34,8 +39,11 @@ import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
+import net.minecraft.text.Text;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 
 public class ServerHealthcareSystem extends Module {
 
@@ -48,6 +56,13 @@ public class ServerHealthcareSystem extends Module {
 
     // ── General ───────────────────────────────────────────────────────────────
 
+    private final Setting<OperationMode> mode = sgGeneral.add(new EnumSetting.Builder<OperationMode>()
+        .name("mode")
+        .description("Changes the behavior of the module between Default and Quick Respawn modes.")
+        .defaultValue(OperationMode.Default)
+        .build()
+    );
+
     private final Setting<Boolean> autoRespawn = sgGeneral.add(new BoolSetting.Builder()
         .name("auto-respawn")
         .description("Automatically respawns after death.")
@@ -59,6 +74,7 @@ public class ServerHealthcareSystem extends Module {
         .name("auto-totem")
         .description("Automatically equips a totem of undying in your offhand.")
         .defaultValue(true)
+        .visible(() -> mode.get() == OperationMode.Default)
         .build()
     );
 
@@ -68,14 +84,15 @@ public class ServerHealthcareSystem extends Module {
         .name("auto-armor")
         .description("Automatically equips the best armor in your inventory.")
         .defaultValue(true)
+        .visible(() -> mode.get() == OperationMode.Default)
         .build()
     );
 
     private final Setting<ChestplateMode> chestplateMode = sgAutoArmor.add(new EnumSetting.Builder<ChestplateMode>()
         .name("chestplate-mode")
-        .description("How to manage the chest slot: always prefer a chestplate, always an elytra, or dynamically swap.")
-        .defaultValue(ChestplateMode.Dynamic)
-        .visible(autoArmor::get)
+        .description("How to manage the chest slot.")
+        .defaultValue(ChestplateMode.Chestplate)
+        .visible(() -> mode.get() == OperationMode.Default && autoArmor.get())
         .build()
     );
 
@@ -89,13 +106,13 @@ public class ServerHealthcareSystem extends Module {
             ChestplateMode next;
             switch (current) {
                 case Chestplate: next = ChestplateMode.Elytra; break;
-                case Elytra:     next = ChestplateMode.Dynamic; break;
+                case Elytra:     next = ChestplateMode.Smart; break;
                 default:         next = ChestplateMode.Chestplate; break;
             }
             chestplateMode.set(next);
             info("Chestplate mode set to: %s", next.name());
         })
-        .visible(autoArmor::get)
+        .visible(() -> mode.get() == OperationMode.Default && autoArmor.get())
         .build()
     );
 
@@ -104,7 +121,7 @@ public class ServerHealthcareSystem extends Module {
         .description("Ticks to wait after performing a chest/elytra swap.")
         .defaultValue(10)
         .min(0)
-        .visible(() -> autoArmor.get() && chestplateMode.get() == ChestplateMode.Dynamic)
+        .visible(() -> mode.get() == OperationMode.Default && autoArmor.get() && chestplateMode.get() == ChestplateMode.Smart)
         .build()
     );
 
@@ -112,7 +129,7 @@ public class ServerHealthcareSystem extends Module {
         .name("ignored-enchantments")
         .description("Armor with these enchantments will be ignored by Auto Armor.")
         .defaultValue(Enchantments.BINDING_CURSE)
-        .visible(autoArmor::get)
+        .visible(() -> mode.get() == OperationMode.Default && autoArmor.get())
         .build()
     );
 
@@ -153,6 +170,7 @@ public class ServerHealthcareSystem extends Module {
         .name("disconnect-on-totem-pop")
         .description("Disconnects when a totem of undying is consumed.")
         .defaultValue(false)
+        .visible(() -> mode.get() == OperationMode.Default)
         .build()
     );
 
@@ -160,6 +178,29 @@ public class ServerHealthcareSystem extends Module {
         .name("disconnect-on-no-totems")
         .description("Disconnects if totem count reaches zero.")
         .defaultValue(false)
+        .visible(() -> mode.get() == OperationMode.Default)
+        .build()
+    );
+
+    private final Setting<Keybind> breakBedHotkey = sgSafety.add(new KeybindSetting.Builder()
+        .name("break-bed-hotkey")
+        .description("Hotkey to automatically break the nearest bed when in Quick Respawn mode.")
+        .defaultValue(Keybind.none())
+        .action(() -> {
+            if (mc.currentScreen != null) return;
+            if (mode.get() == OperationMode.QuickRespawn) {
+                BlockPos nearest = findNearestBed();
+                if (nearest != null) {
+                    bedToBreak = nearest;
+                    breakTickCounter = 0;
+                    originalHotbarSlot = mc.player.getInventory().selectedSlot;
+                    info("Initiating bed breaking at %s...", nearest.toShortString());
+                } else {
+                    warning("No bed found nearby to break.");
+                }
+            }
+        })
+        .visible(() -> mode.get() == OperationMode.QuickRespawn)
         .build()
     );
 
@@ -181,6 +222,10 @@ public class ServerHealthcareSystem extends Module {
     // Auto Armor
     private int swapTimer = 0;
 
+    // Auto Break Bed
+    private BlockPos bedToBreak = null;
+    private int breakTickCounter = 0;
+    private int originalHotbarSlot = -1; // Stores the slot before tool swap for bed breaking
     // ── Constructor ───────────────────────────────────────────────────────────
 
     public ServerHealthcareSystem() {
@@ -197,6 +242,7 @@ public class ServerHealthcareSystem extends Module {
             fullHunger = mc.player.getHungerManager().getFoodLevel();
         }
         resetState();
+        // No need to reset originalHotbarSlot here, it's handled in onDeactivate
     }
 
     @Override
@@ -204,6 +250,9 @@ public class ServerHealthcareSystem extends Module {
         stopEating();
         lastHealth = -1;
         fullHunger = -1;
+        if (originalHotbarSlot != -1) { // Ensure we swap back if module is deactivated mid-break
+            InvUtils.swap(originalHotbarSlot, false);
+        }
         resetState();
     }
 
@@ -221,6 +270,7 @@ public class ServerHealthcareSystem extends Module {
 
     public boolean isAutoTotemEnabled() { return isActive() && autoTotem.get(); }
     public void setAutoTotem(boolean enabled) { autoTotem.set(enabled); }
+    public boolean isEating() { return isEating; }
 
     // ── State Helpers ─────────────────────────────────────────────────────────
 
@@ -229,6 +279,7 @@ public class ServerHealthcareSystem extends Module {
         ateForFire            = false;
         tookDamageWhileOnFire = false;
         eatHotbarSlot         = -1;
+        originalHotbarSlot    = -1;
         eatTargetItem         = null;
         eatStartupTicks       = 0;
         eatTicksRemaining     = 0;
@@ -265,11 +316,19 @@ public class ServerHealthcareSystem extends Module {
 
         if (swapTimer > 0) swapTimer--;
 
-        tickHealthTracking();
-        tickAutoRespawn();
-        tickAutoTotem();
-        tickAutoArmor();
-        tickAutoEat();
+        tickHealthTracking(); // Always needed for health-based triggers
+
+        switch (mode.get()) {
+            case Default -> {
+                tickAutoTotem();
+                tickAutoArmor();
+                tickAutoEat();
+                tickAutoRespawn();
+            }
+            case QuickRespawn -> {
+                tickQuickRespawnMode();
+            }
+        }
     }
 
     private void tickHealthTracking() {
@@ -295,6 +354,55 @@ public class ServerHealthcareSystem extends Module {
         }
     }
 
+    private void tickQuickRespawnMode() {
+        tickAutoRespawn();
+        tickAutoEat();
+
+        if (bedToBreak != null) {
+            // Check if bed is still there
+            if (!(mc.world.getBlockState(bedToBreak).getBlock() instanceof BedBlock)) {
+                info("Bed at %s broken.", bedToBreak.toShortString());
+                bedToBreak = null;
+                if (originalHotbarSlot != -1) {
+                    InvUtils.swap(originalHotbarSlot, false); // Swap back
+                    originalHotbarSlot = -1;
+                }
+                return;
+            }
+
+            // Check if player moved too far
+            if (mc.player.getPos().distanceTo(Vec3d.ofCenter(bedToBreak)) > 6.0) {
+                warning("Too far from bed, stopping breaking.");
+                bedToBreak = null;
+                if (originalHotbarSlot != -1) {
+                    InvUtils.swap(originalHotbarSlot, false); // Swap back
+                    originalHotbarSlot = -1;
+                }
+                return;
+            }
+
+            int bestToolSlot = findBestTool(bedToBreak);
+            
+            // If a better tool is found and it's not currently selected, swap to it.
+            // If bestToolSlot is -1, it means the bare hand (or current item) is the best, so no swap is needed.
+            if (bestToolSlot != -1 && mc.player.getInventory().selectedSlot != bestToolSlot) {
+                // Save the original slot only if we are actually swapping to a tool.
+                if (originalHotbarSlot == -1) {
+                    originalHotbarSlot = mc.player.getInventory().selectedSlot;
+                }
+                InvUtils.swap(bestToolSlot, false);
+            }
+
+            Rotations.rotate(Rotations.getYaw(bedToBreak), Rotations.getPitch(bedToBreak), () -> {
+                mc.interactionManager.updateBlockBreakingProgress(bedToBreak, Direction.UP);
+                mc.player.swingHand(Hand.MAIN_HAND);
+            });
+
+            breakTickCounter++;
+            // Optional: Add a timeout if breaking takes too long
+        }
+    }
+
     private void tickAutoTotem() {
         if (!autoTotem.get()) return;
 
@@ -311,12 +419,12 @@ public class ServerHealthcareSystem extends Module {
     private void tickAutoArmor() {
         if (!autoArmor.get() || swapTimer > 0) return;
 
-        if (chestplateMode.get() == ChestplateMode.Dynamic) handleChestplateElytraSwitch();
+        if (chestplateMode.get() == ChestplateMode.Smart) handleChestplateElytraSwitch();
 
         EquipmentSlot[] slots = { EquipmentSlot.FEET, EquipmentSlot.LEGS, EquipmentSlot.CHEST, EquipmentSlot.HEAD };
         for (int i = 0; i < 4; i++) {
             EquipmentSlot slot = slots[i];
-            if (slot == EquipmentSlot.CHEST && chestplateMode.get() == ChestplateMode.Dynamic) continue;
+            if (slot == EquipmentSlot.CHEST && chestplateMode.get() == ChestplateMode.Smart) continue;
 
             ItemStack current   = mc.player.getEquippedStack(slot);
             int       bestValue = getArmorValue(current);
@@ -415,7 +523,7 @@ public class ServerHealthcareSystem extends Module {
 
     @EventHandler
     private void onPacketReceive(PacketEvent.Receive event) {
-        if (mc.player == null || mc.world == null || !disconnectOnTotemPop.get()) return;
+        if (mc.player == null || mc.world == null || mode.get() != OperationMode.Default || !disconnectOnTotemPop.get()) return;
 
         if (event.packet instanceof EntityStatusS2CPacket packet) {
             if (packet.getStatus() == 35
@@ -551,11 +659,57 @@ public class ServerHealthcareSystem extends Module {
         return 0;
     }
 
+    private BlockPos findNearestBed() {
+        if (mc.player == null || mc.world == null) return null;
+
+        BlockPos playerPos = mc.player.getBlockPos();
+        double minDistanceSq = Double.MAX_VALUE;
+        BlockPos nearestBed = null;
+
+        // Search in a 5x5x5 cube around the player
+        for (int x = -5; x <= 5; x++) {
+            for (int y = -5; y <= 5; y++) {
+                for (int z = -5; z <= 5; z++) {
+                    BlockPos pos = playerPos.add(x, y, z);
+                    if (mc.world.getBlockState(pos).getBlock() instanceof BedBlock) {
+                        double distanceSq = playerPos.getSquaredDistance(pos);
+                        if (distanceSq < minDistanceSq) {
+                            minDistanceSq = distanceSq;
+                            nearestBed = pos;
+                        }
+                    }
+                }
+            }
+        }
+        return nearestBed;
+    }
+
+    private int findBestTool(BlockPos blockPos) {
+        if (mc.player == null || mc.world == null) return -1;
+
+        BlockState state = mc.world.getBlockState(blockPos);
+        float bestSpeed = 1.0f; // Default speed for bare hand
+        int bestSlot = -1;
+
+        for (int i = 0; i < 9; i++) { // Iterate hotbar
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (stack.isEmpty()) continue;
+
+            float speed = stack.getMiningSpeedMultiplier(state);
+            if (speed > bestSpeed) { bestSpeed = speed; bestSlot = i; }
+        }
+        return bestSlot;
+    }
     // ── Enums ─────────────────────────────────────────────────────────────────
 
+    public enum OperationMode {
+        Default,
+        QuickRespawn
+    }
+
     public enum ChestplateMode {
-        Chestplate, // Always prefer chestplate
-        Elytra,     // Always prefer elytra
-        Dynamic     // Chestplate on ground, elytra in air
+        Chestplate,
+        Elytra,
+        Smart
     }
 }

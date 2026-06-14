@@ -2,12 +2,14 @@ package com.example.addon.modules;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.addon.HuntingUtilities;
 import com.example.addon.utils.GlowingRegistry;
@@ -93,7 +95,7 @@ public class DungeonAssistant extends Module {
     // State
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final Map<BlockPos, TargetType>  targets               = new HashMap<>();
+    private final Map<BlockPos, TargetType>  targets               = new ConcurrentHashMap<>();
     private final Set<ChunkPos>              scannedChunks         = new HashSet<>();
     private final Set<BlockPos>              checkedContainers     = new HashSet<>();
     private final List<EndermiteEntity>      endermiteTargets      = new ArrayList<>();
@@ -110,6 +112,7 @@ public class DungeonAssistant extends Module {
     private int      breakDelayTimer   = 0;
     private int      previousSlot      = -1;
     private int      brokenChestsCount = 0;
+    private int      lootFoundCount    = 0;
 
     // Auto-open
     private boolean  wasAutoOpened                  = false;
@@ -435,6 +438,7 @@ public class DungeonAssistant extends Module {
         checkedEntityIds.clear();
         spawnerTorches.clear();
         brokenChestsCount = 0;
+        lootFoundCount    = 0;
         isBreakingChest = false;
         hasPlayedSoundForCurrentScreen = false;
         GlowingRegistry.clear();
@@ -576,18 +580,6 @@ public class DungeonAssistant extends Module {
                     renderGlowLayers(event, beamBox, color);
                     event.renderer.box(beamBox, withAlpha(color, 60), color, ShapeMode.Both, 0);
                 }
-            }
-        }
-
-        if (!spawnerTorches.isEmpty()) {
-            SettingColor color = spawnerTorchColor.get();
-            for (BlockPos pos : spawnerTorches) {
-                Box torchBox = createPaddedBox(pos);
-                if (!isSpectral) renderGlowLayers(event, torchBox, color);
-                event.renderer.box(torchBox,
-                    withAlpha(color, isSpectral ? spectralBlockFillAlpha.get() : 0),
-                    isSpectral ? withAlpha(color, 0) : color,
-                    isSpectral ? ShapeMode.Sides : ShapeMode.Lines, 0);
             }
         }
     }
@@ -846,6 +838,7 @@ public class DungeonAssistant extends Module {
                                 && (mc.world.getBlockState(lastOpenedContainer).getBlock() == Blocks.CHEST
                                 ||  mc.world.getBlockState(lastOpenedContainer).getBlock() == Blocks.TRAPPED_CHEST));
                         if (isChestOrMinecart) {
+                            lootFoundCount++;
                             mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
                             hasPlayedSoundForCurrentScreen = true;
                         }
@@ -899,6 +892,7 @@ public class DungeonAssistant extends Module {
 
         cleanupDistantTargets(playerPos);
         scanChestMinecarts();
+        pruneBlockTargets();
         scanNewChunks(centerChunkX, centerChunkZ);
         scanEndermites();
         scanSpawnerTorches();
@@ -1216,6 +1210,48 @@ public class DungeonAssistant extends Module {
         );
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Pruning — validate block targets still exist in loaded chunks,
+    //           and mark unloaded chunks for re-scanning
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void pruneBlockTargets() {
+        if (mc.world == null || mc.player == null) return;
+
+        Set<BlockPos> toRemove = new HashSet<>();
+        Set<ChunkPos> chunksToRescan = new HashSet<>();
+
+        for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
+            TargetType type = entry.getValue();
+            // Chest minecarts are already pruned by scanChestMinecarts()
+            if (type == TargetType.CHEST_MINECART) continue;
+
+            BlockPos pos = entry.getKey();
+            int chunkX = pos.getX() >> 4;
+            int chunkZ = pos.getZ() >> 4;
+
+            if (mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ)) {
+                // Chunk is loaded — validate the block still matches the expected type
+                Block currentBlock = mc.world.getBlockState(pos).getBlock();
+                if (mc.world.getBlockState(pos).isAir() || !validateBlockType(currentBlock, type)) {
+                    toRemove.add(pos);
+                }
+            } else {
+                // Chunk is not loaded — mark it so it gets re-scanned when it comes back
+                chunksToRescan.add(new ChunkPos(chunkX, chunkZ));
+            }
+        }
+
+        for (BlockPos pos : toRemove) {
+            targets.remove(pos);
+        }
+
+        // Force re-scan of chunks that unloaded, so we pick up changes when they reload
+        if (!chunksToRescan.isEmpty()) {
+            scannedChunks.removeAll(chunksToRescan);
+        }
+    }
+
     private void pruneCheckedEntityIds() {
         if (checkedEntityIds.isEmpty()) return;
         Set<Integer> liveIds = new HashSet<>();
@@ -1369,16 +1405,69 @@ public class DungeonAssistant extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Public API
+    // Public API — only counts targets in loaded chunks with valid blocks
     // ═══════════════════════════════════════════════════════════════════════════
 
-    public int getTotalTargets()      { return targets.size(); }
+    public int getTotalTargets() {
+        if (mc.player == null || mc.world == null) return 0;
+
+        double rangeSq = Math.pow(range.get() * 16.0, 2);
+        int count = 0;
+
+        for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
+            BlockPos pos = entry.getKey();
+            TargetType type = entry.getValue();
+
+            double dx = pos.getX() + 0.5 - mc.player.getX();
+            double dz = pos.getZ() + 0.5 - mc.player.getZ();
+            if (dx * dx + dz * dz > rangeSq) continue;
+
+            // Only count targets in currently loaded chunks
+            if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
+
+            // Validate block types still exist (minecarts are already pruned by scanChestMinecarts)
+            if (type != TargetType.CHEST_MINECART) {
+                Block currentBlock = mc.world.getBlockState(pos).getBlock();
+                if (!validateBlockType(currentBlock, type)) continue;
+            }
+
+            count++;
+        }
+
+        return count;
+    }
+
     public int getBrokenChestsCount() { return brokenChestsCount; }
+    public int getLootFoundCount()    { return lootFoundCount; }
 
     public Map<TargetType, Integer> getTargetCounts() {
-        Map<TargetType, Integer> counts = new HashMap<>();
+        Map<TargetType, Integer> counts = new EnumMap<>(TargetType.class);
         for (TargetType type : TargetType.values()) counts.put(type, 0);
-        for (TargetType type : targets.values())    counts.put(type, counts.get(type) + 1);
+
+        if (mc.player == null || mc.world == null) return counts;
+
+        double rangeSq = Math.pow(range.get() * 16.0, 2);
+
+        for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
+            BlockPos pos = entry.getKey();
+            TargetType type = entry.getValue();
+
+            double dx = pos.getX() + 0.5 - mc.player.getX();
+            double dz = pos.getZ() + 0.5 - mc.player.getZ();
+            if (dx * dx + dz * dz > rangeSq) continue;
+
+            // Only count targets in currently loaded chunks
+            if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
+
+            // Validate block types still exist (minecarts are already pruned by scanChestMinecarts)
+            if (type != TargetType.CHEST_MINECART) {
+                Block currentBlock = mc.world.getBlockState(pos).getBlock();
+                if (!validateBlockType(currentBlock, type)) continue;
+            }
+
+            counts.put(type, counts.get(type) + 1);
+        }
+
         return counts;
     }
 }
