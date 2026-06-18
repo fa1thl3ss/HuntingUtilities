@@ -1,6 +1,8 @@
 package com.example.addon.hud;
 
 import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.example.addon.HuntingUtilities;
 import com.example.addon.modules.RocketPilot;
@@ -37,6 +39,25 @@ public class RocketPilotHud extends HudElement {
     private final SettingGroup sgElytra  = settings.createGroup("Elytra Warnings");
     private final SettingGroup sgRockets = settings.createGroup("Rocket Warnings");
 
+    // ── Layout ────────────────────────────────────────────────────────────────
+
+    public enum Layout { Inline, Stacked, StackedIcons }
+
+    private final Setting<Layout> layout = sgGeneral.add(new EnumSetting.Builder<Layout>()
+        .name("layout")
+        .description("How the data is presented.")
+        .defaultValue(Layout.StackedIcons)
+        .build()
+    );
+
+    private final Setting<SettingColor> separatorColor = sgGeneral.add(new ColorSetting.Builder()
+        .name("separator-color")
+        .description("Color of the | separators.")
+        .defaultValue(new SettingColor(100, 100, 100, 255))
+        .visible(() -> layout.get() == Layout.Inline)
+        .build()
+    );
+
     // ── Visual settings ───────────────────────────────────────────────────────
 
     private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
@@ -54,6 +75,7 @@ public class RocketPilotHud extends HudElement {
         .name("alignment")
         .description("Align text to the left, center, or right within the element.")
         .defaultValue(Alignment.Left)
+        .visible(() -> layout.get() != Layout.Inline)
         .build()
     );
 
@@ -63,6 +85,7 @@ public class RocketPilotHud extends HudElement {
         .name("label-mode")
         .description("Show the item label as text, icon, or both.")
         .defaultValue(LabelMode.Both)
+        .visible(() -> layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline)
         .build()
     );
 
@@ -74,7 +97,7 @@ public class RocketPilotHud extends HudElement {
         .name("icon-position")
         .description("Where the item icon appears relative to the text on each stat row.")
         .defaultValue(IconPosition.Left)
-        .visible(() -> labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
 
@@ -269,10 +292,82 @@ public class RocketPilotHud extends HudElement {
 
     // ── Render ────────────────────────────────────────────────────────────────
 
+    private record Stat(String label, String value, ItemStack icon, SettingColor valColor) {}
+
     @Override
     public void render(HudRenderer renderer) {
         if (mc.player == null) { setSize(0, 0); return; }
 
+        if (layout.get() == Layout.Inline) renderInline(renderer);
+        else renderStacked(renderer, layout.get() == Layout.StackedIcons);
+    }
+
+    private void renderInline(HudRenderer renderer) {
+        double s = scale.get(), padH = 4 * s, padV = 2 * s, lh = renderer.textHeight(false, s), sepW = renderer.textWidth(" | ", false, s);
+        double iconSz = 16.0 * iconScale.get(), iconGap = iconGapSetting.get() * s;
+        LabelMode mode = labelMode.get(); boolean showIcon = mode != LabelMode.Text, showLabel = mode != LabelMode.Icon;
+        IconPosition iconPos = iconPosition.get(); double effIconGap = showIcon ? iconGap : 0;
+
+        List<Stat> stats = new ArrayList<>();
+
+        int elytraCount = countElytras();
+        if (showDurability.get() && (elytraCount > 0 || isInEditor())) {
+            SettingColor col = valueColor.get();
+            if (elytraCount <= elytraCriticalCount.get()) col = elytraCriticalColor.get();
+            else if (elytraCount <= elytraWarningCount.get()) col = elytraWarningColor.get();
+            stats.add(new Stat("Elytras: ", String.valueOf(elytraCount), new ItemStack(Items.ELYTRA), col));
+        }
+
+        int currentRockets = countRockets();
+        if (showRocketCount.get() && (currentRockets > 0 || isInEditor())) {
+            SettingColor col = valueColor.get();
+            if (currentRockets <= rocketCriticalThreshold.get()) col = rocketCriticalColor.get();
+            else if (currentRockets <= rocketWarningThreshold.get()) col = rocketWarningColor.get();
+            stats.add(new Stat("Rockets: ", String.valueOf(currentRockets), new ItemStack(Items.FIREWORK_ROCKET), col));
+        }
+
+        if (stats.isEmpty()) { setSize(0, 0); return; }
+
+        double totalW = 0, rowH = showIcon ? Math.max(lh, iconSz) : lh;
+        for (int i = 0; i < stats.size(); i++) {
+            Stat st = stats.get(i);
+            double segW = 0;
+            if (showLabel) segW += renderer.textWidth(st.label, false, s);
+            segW += renderer.textWidth(st.value, false, s);
+            if (showIcon) segW += iconSz + effIconGap;
+            totalW += segW;
+            if (i < stats.size() - 1) totalW += sepW;
+        }
+        setSize(totalW + padH * 2, rowH + padV * 2);
+        if (showBackground.get()) renderer.quad(x, y, getWidth(), getHeight(), backgroundColor.get());
+
+        double cx = x + padH;
+        for (int i = 0; i < stats.size(); i++) {
+            Stat st = stats.get(i);
+            if (showIcon && iconPos == IconPosition.Left) {
+                renderer.item(st.icon, (int) cx, (int) (y + padV + (rowH - iconSz) / 2.0), iconScale.get().floatValue(), false);
+                cx += iconSz + effIconGap;
+            }
+            if (showLabel) {
+                renderer.text(st.label, cx, y + padV + (rowH - lh) / 2.0, labelColor.get(), false, s);
+                cx += renderer.textWidth(st.label, false, s);
+            }
+            renderer.text(st.value, cx, y + padV + (rowH - lh) / 2.0, st.valColor, false, s);
+            cx += renderer.textWidth(st.value, false, s);
+
+            if (showIcon && iconPos != IconPosition.Left) {
+                cx += effIconGap;
+                renderer.item(st.icon, (int) cx, (int) (y + padV + (rowH - iconSz) / 2.0), iconScale.get().floatValue(), false);
+                cx += iconSz;
+            }
+            if (i < stats.size() - 1) {
+                renderer.text(" | ", cx, y + padV + (rowH - lh) / 2.0, separatorColor.get(), false, s);
+                cx += sepW;
+            }
+        }
+    }
+
+    private void renderStacked(HudRenderer renderer, boolean withIcons) {
         RocketPilot rp = Modules.get().get(RocketPilot.class);
 
         double s          = scale.get();

@@ -1,5 +1,7 @@
 package com.example.addon.mixin;
 
+import com.example.addon.modules.EightToOne;
+import com.example.addon.modules.Gatekeeper;
 import com.example.addon.modules.Tunnelers;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.world.ClientChunkManager;
@@ -68,6 +70,15 @@ public abstract class TunnelersMixin {
             Consumer<ChunkData.BlockEntityVisitor> chunkDataConsumer,
             CallbackInfoReturnable<WorldChunk> cir
     ) {
+        WorldChunk chunk = cir.getReturnValue();
+        if (chunk == null) return;
+        ChunkPos pos = chunk.getPos();
+
+        EightToOne eto = Modules.get().get(EightToOne.class);
+        if (eto != null && eto.isActive()) eto.markChunkDirty(pos);
+
+        Gatekeeper gk = Modules.get().get(Gatekeeper.class);
+        if (gk != null && gk.isActive()) gk.markChunkDirty(pos);
     }
 
     // ------------------------------------------------------------------ //
@@ -87,5 +98,10 @@ public abstract class TunnelersMixin {
         at = @At("HEAD")
     )
     private void tunnelers$onChunkUnloaded(ChunkPos pos, CallbackInfo ci) {
+        EightToOne eto = Modules.get().get(EightToOne.class);
+        if (eto != null && eto.isActive()) eto.markChunkDirty(pos);
+
+        Gatekeeper gk = Modules.get().get(Gatekeeper.class);
+        if (gk != null && gk.isActive()) gk.markChunkDirty(pos);
     }
 }

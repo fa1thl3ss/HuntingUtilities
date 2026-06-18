@@ -1,6 +1,7 @@
 package com.example.addon.mixin;
 
-import com.example.addon.modules.PortalTracker;
+import com.example.addon.modules.EightToOne;
+import com.example.addon.modules.Gatekeeper;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -14,7 +15,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * This mixin helps PortalTracker detect portal block changes more efficiently
+ * This mixin helps portal modules detect block changes more efficiently
  * by marking chunks as dirty when portal-related blocks are modified.
  */
 @Mixin(World.class)
@@ -46,10 +47,14 @@ public abstract class PortalTrackerMixin {
                                   newState.isOf(Blocks.END_PORTAL_FRAME);
 
         if (isPortalRelated) {
-            PortalTracker tracker = Modules.get().get(PortalTracker.class);
-            if (tracker != null && tracker.isActive()) {
-                // Mark the chunk as dirty so it gets re-scanned
-                tracker.markChunkDirty(new ChunkPos(pos));
+            EightToOne eto = Modules.get().get(EightToOne.class);
+            if (eto != null && eto.isActive()) {
+                eto.markChunkDirty(new ChunkPos(pos));
+            }
+
+            Gatekeeper gk = Modules.get().get(Gatekeeper.class);
+            if (gk != null && gk.isActive()) {
+                gk.markChunkDirty(new ChunkPos(pos));
             }
         }
     }

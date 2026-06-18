@@ -57,7 +57,7 @@ public class DungeonAssistantHud extends HudElement {
     private final Setting<LabelMode> labelMode = sgGeneral.add(new EnumSetting.Builder<LabelMode>()
         .name("label-mode")
         .defaultValue(LabelMode.Both)
-        .visible(() -> layout.get() == Layout.StackedIcons)
+        .visible(() -> layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline)
         .build()
     );
 
@@ -66,14 +66,14 @@ public class DungeonAssistantHud extends HudElement {
     private final Setting<IconPosition> iconPosition = sgGeneral.add(new EnumSetting.Builder<IconPosition>()
         .name("icon-position")
         .defaultValue(IconPosition.Left)
-        .visible(() -> layout.get() == Layout.StackedIcons && labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
 
     private final Setting<Double> iconScale = sgGeneral.add(new DoubleSetting.Builder()
         .name("icon-scale")
         .defaultValue(1.5).min(0.5).sliderRange(0.5, 4.0)
-        .visible(() -> layout.get() == Layout.StackedIcons && labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
     
@@ -81,7 +81,7 @@ public class DungeonAssistantHud extends HudElement {
         .name("icon-gap")
         .description("Gap in pixels between icon and text.")
         .defaultValue(4.0).min(0).sliderRange(0, 16)
-        .visible(() -> layout.get() == Layout.StackedIcons && labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
 
@@ -188,30 +188,45 @@ public class DungeonAssistantHud extends HudElement {
     }
 
     private void renderInline(HudRenderer renderer, List<Stat> stats) {
-        double s = scale.get();
-        double padH = 4 * s, padV = 2 * s;
-        double lh = renderer.textHeight(false, s);
-        double sepW = renderer.textWidth(" | ", false, s);
+        double s = scale.get(), padH = 4 * s, padV = 2 * s, lh = renderer.textHeight(false, s), sepW = renderer.textWidth(" | ", false, s);
+        double iconSz = 16.0 * iconScale.get(), iconGap = iconGapSetting.get() * s;
+        LabelMode mode = labelMode.get(); boolean showIcon = mode != LabelMode.Text, showLabel = mode != LabelMode.Icon;
+        IconPosition iconPos = iconPosition.get(); double effIconGap = showIcon ? iconGap : 0;
 
-        double totalW = 0;
+        double totalW = 0, rowH = showIcon ? Math.max(lh, iconSz) : lh;
         for (int i = 0; i < stats.size(); i++) {
             Stat st = stats.get(i);
-            totalW += renderer.textWidth(st.label(), false, s) + renderer.textWidth(st.value(), false, s);
+            double segW = 0;
+            if (showLabel) segW += renderer.textWidth(st.label(), false, s);
+            segW += renderer.textWidth(st.value(), false, s);
+            if (showIcon) segW += iconSz + effIconGap;
+            totalW += segW;
             if (i < stats.size() - 1) totalW += sepW;
         }
-
-        setSize(totalW + padH * 2, lh + padV * 2);
+        setSize(totalW + padH * 2, rowH + padV * 2);
         if (showBackground.get()) renderer.quad(x, y, getWidth(), getHeight(), backgroundColor.get());
 
         double cx = x + padH;
         for (int i = 0; i < stats.size(); i++) {
             Stat st = stats.get(i);
-            renderer.text(st.label(), cx, y + padV, labelColor.get(), false, s);
-            cx += renderer.textWidth(st.label(), false, s);
-            renderer.text(st.value(), cx, y + padV, st.color(), false, s);
+            if (showIcon && iconPos == IconPosition.Left) {
+                renderer.item(st.icon(), (int) cx, (int) (y + padV + (rowH - iconSz) / 2.0), iconScale.get().floatValue(), false);
+                cx += iconSz + effIconGap;
+            }
+            if (showLabel) {
+                renderer.text(st.label(), cx, y + padV + (rowH - lh) / 2.0, labelColor.get(), false, s);
+                cx += renderer.textWidth(st.label(), false, s);
+            }
+            renderer.text(st.value(), cx, y + padV + (rowH - lh) / 2.0, st.color(), false, s);
             cx += renderer.textWidth(st.value(), false, s);
+
+            if (showIcon && iconPos != IconPosition.Left) {
+                cx += effIconGap;
+                renderer.item(st.icon(), (int) cx, (int) (y + padV + (rowH - iconSz) / 2.0), iconScale.get().floatValue(), false);
+                cx += iconSz;
+            }
             if (i < stats.size() - 1) {
-                renderer.text(" | ", cx, y + padV, separatorColor.get(), false, s);
+                renderer.text(" | ", cx, y + padV + (rowH - lh) / 2.0, separatorColor.get(), false, s);
                 cx += sepW;
             }
         }

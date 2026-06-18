@@ -92,7 +92,7 @@ public class Graveyard extends Module {
         .build()
     );
 
-    private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListSetting.Builder()
+private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListSetting.Builder()
         .name("whitelisted-items")
         .description("Items to look for on the ground, like diamond swords and valuable gear.")
         .defaultValue(List.of(Items.ELYTRA, Items.TOTEM_OF_UNDYING, Items.BOW,
@@ -106,7 +106,7 @@ public class Graveyard extends Module {
             Items.WHITE_SHULKER_BOX, Items.ORANGE_SHULKER_BOX, Items.MAGENTA_SHULKER_BOX, Items.LIGHT_BLUE_SHULKER_BOX,
             Items.YELLOW_SHULKER_BOX, Items.LIME_SHULKER_BOX, Items.PINK_SHULKER_BOX, Items.GRAY_SHULKER_BOX,
             Items.LIGHT_GRAY_SHULKER_BOX, Items.CYAN_SHULKER_BOX, Items.PURPLE_SHULKER_BOX, Items.BLUE_SHULKER_BOX,
-            Items.BROWN_SHULKER_BOX, Items.GREEN_SHULKER_BOX, Items.RED_SHULKER_BOX,
+            Items.BROWN_SHULKER_BOX, Items.GREEN_SHULKER_BOX, Items.RED_SHULKER_BOX, Items.BLACK_SHULKER_BOX,
             Items.NETHERITE_PICKAXE, Items.NETHERITE_AXE, Items.NETHERITE_SHOVEL, Items.NETHERITE_SWORD, Items.NETHERITE_HOE,
             Items.DIAMOND_HELMET, Items.DIAMOND_CHESTPLATE, Items.DIAMOND_LEGGINGS, Items.DIAMOND_BOOTS,
             Items.NETHERITE_HELMET, Items.NETHERITE_CHESTPLATE, Items.NETHERITE_LEGGINGS, Items.NETHERITE_BOOTS

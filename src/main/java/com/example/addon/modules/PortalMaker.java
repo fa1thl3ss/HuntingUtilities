@@ -43,29 +43,18 @@ import net.minecraft.util.math.Vec3d;
 
 public class PortalMaker extends Module {
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Enums
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ── Enums ──────────────────────────────────────────────────────
+    public enum EntryMode    { None, Walk, Pearl }
+    private enum RecycleState { IDLE, STEPPING_OUT, WAITING, RE_ENTERING }
 
-    public enum EntryMode {
-        None, Walk, Pearl
-    }
+    // ── Setting Groups ─────────────────────────────────────────────
+    private final SettingGroup sgGeneral  = settings.getDefaultGroup();
+    private final SettingGroup sgMovement = settings.createGroup("Movement & Entry");
+    private final SettingGroup sgRecycle  = settings.createGroup("Recycle");
+    private final SettingGroup sgRender   = settings.createGroup("Render");
+    private final SettingGroup sgGlow     = settings.createGroup("Glow");
 
-    private enum RecycleState {
-        IDLE, STEPPING_OUT, WAITING, RE_ENTERING
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Setting Groups
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgGlow    = settings.createGroup("Glow");
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — General
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Settings — Building ────────────────────────────────────────
     private final Setting<Integer> placeDelay = sgGeneral.add(new IntSetting.Builder()
         .name("place-delay")
         .description("Ticks to wait between placement actions.")
@@ -73,66 +62,10 @@ public class PortalMaker extends Module {
         .build()
     );
 
-    private final Setting<Boolean> render = sgGeneral.add(new BoolSetting.Builder()
-        .name("render")
-        .description("Show remaining portal frame positions.")
-        .defaultValue(true)
-        .build()
-    );
-
-    private final Setting<ShapeMode> shapeMode = sgGeneral.add(new EnumSetting.Builder<ShapeMode>()
-        .name("shape-mode")
-        .description("How the preview boxes are rendered.")
-        .defaultValue(ShapeMode.Both)
-        .build()
-    );
-
-    private final Setting<SettingColor> sideColor = sgGeneral.add(new ColorSetting.Builder()
-        .name("side-color")
-        .defaultValue(new SettingColor(80, 160, 255, 35))
-        .build()
-    );
-
-    private final Setting<SettingColor> lineColor = sgGeneral.add(new ColorSetting.Builder()
-        .name("line-color")
-        .defaultValue(new SettingColor(100, 180, 255, 255))
-        .build()
-    );
-
-    private final Setting<EntryMode> entryMode = sgGeneral.add(new EnumSetting.Builder<EntryMode>()
-        .name("entry-mode")
-        .description("How to enter the portal after it is created.")
-        .defaultValue(EntryMode.Walk)
-        .build()
-    );
-
-    private final Setting<Boolean> renderBreadcrumbs = sgGeneral.add(new BoolSetting.Builder()
-        .name("render-breadcrumbs")
-        .description("Draw a trail showing the walker's path for debugging.")
-        .defaultValue(false)
-        .visible(() -> entryMode.get() == EntryMode.Walk)
-        .build()
-    );
-
-    private final Setting<SettingColor> breadcrumbColor = sgGeneral.add(new ColorSetting.Builder()
-        .name("breadcrumb-color")
-        .description("Color of the breadcrumb trail.")
-        .defaultValue(new SettingColor(255, 255, 255, 150))
-        .visible(() -> renderBreadcrumbs.get() && entryMode.get() == EntryMode.Walk)
-        .build()
-    );
-
-    private final Setting<Boolean> autoRecycle = sgGeneral.add(new BoolSetting.Builder()
-        .name("auto-recycle")
-        .description("After changing dimension, automatically step out, wait, and go back in.")
-        .defaultValue(false)
-        .build()
-    );
-
-    private final Setting<Boolean> cancelOnMovement = sgGeneral.add(new BoolSetting.Builder()
-        .name("cancel-on-movement")
-        .description("Cancels the recycle process if you manually press a movement key.")
-        .defaultValue(true)
+    private final Setting<Integer> finishDelay = sgGeneral.add(new IntSetting.Builder()
+        .name("finish-delay")
+        .description("Ticks to wait after lighting the portal before turning off.")
+        .defaultValue(20).min(0).sliderMax(200)
         .build()
     );
 
@@ -144,7 +77,30 @@ public class PortalMaker extends Module {
         .build()
     );
 
-    private final Setting<Integer> recycleDelaySeconds = sgGeneral.add(new IntSetting.Builder()
+    // ── Settings — Movement ────────────────────────────────────────
+    private final Setting<EntryMode> entryMode = sgMovement.add(new EnumSetting.Builder<EntryMode>()
+        .name("entry-mode")
+        .description("How to enter the portal after it is created.")
+        .defaultValue(EntryMode.Walk)
+        .build()
+    );
+
+    // ── Settings — Recycle ─────────────────────────────────────────
+    private final Setting<Boolean> autoRecycle = sgRecycle.add(new BoolSetting.Builder()
+        .name("auto-recycle")
+        .description("After changing dimension, automatically step out, wait, and go back in.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Boolean> cancelOnMovement = sgRecycle.add(new BoolSetting.Builder()
+        .name("cancel-on-movement")
+        .description("Cancels the recycle process if you manually press a movement key.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> recycleDelaySeconds = sgRecycle.add(new IntSetting.Builder()
         .name("recycle-wait-time")
         .description("How many seconds to wait before going back into the portal.")
         .defaultValue(5).min(1).sliderMax(60)
@@ -152,14 +108,14 @@ public class PortalMaker extends Module {
         .build()
     );
 
-    private final Setting<Keybind> recycleKey = sgGeneral.add(new KeybindSetting.Builder()
+    private final Setting<Keybind> recycleKey = sgRecycle.add(new KeybindSetting.Builder()
         .name("recycle-key")
         .description("Manual keybind to trigger the recycle cycle (step out -> wait -> in).")
         .defaultValue(Keybind.none())
         .build()
     );
 
-    private final Setting<Integer> dimensionSwitchCooldownTicks = sgGeneral.add(new IntSetting.Builder()
+    private final Setting<Integer> dimensionSwitchCooldownTicks = sgRecycle.add(new IntSetting.Builder()
         .name("dimension-switch-cooldown")
         .description("Ticks to wait after a dimension change before resuming operations (e.g., recycling).")
         .defaultValue(40)
@@ -167,17 +123,50 @@ public class PortalMaker extends Module {
         .build()
     );
 
-    private final Setting<Integer> finishDelay = sgGeneral.add(new IntSetting.Builder()
-        .name("finish-delay")
-        .description("Ticks to wait after lighting the portal before turning off.")
-        .defaultValue(20).min(0).sliderMax(200)
+    // ── Settings — Render ──────────────────────────────────────────
+    private final Setting<Boolean> render = sgRender.add(new BoolSetting.Builder()
+        .name("render")
+        .description("Show remaining portal frame positions.")
+        .defaultValue(true)
         .build()
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Glow
-    // ═══════════════════════════════════════════════════════════════════════════
+    private final Setting<ShapeMode> shapeMode = sgRender.add(new EnumSetting.Builder<ShapeMode>()
+        .name("shape-mode")
+        .description("How the preview boxes are rendered.")
+        .defaultValue(ShapeMode.Both)
+        .build()
+    );
 
+    private final Setting<SettingColor> sideColor = sgRender.add(new ColorSetting.Builder()
+        .name("side-color")
+        .defaultValue(new SettingColor(80, 160, 255, 35))
+        .build()
+    );
+
+    private final Setting<SettingColor> lineColor = sgRender.add(new ColorSetting.Builder()
+        .name("line-color")
+        .defaultValue(new SettingColor(100, 180, 255, 255))
+        .build()
+    );
+
+    private final Setting<Boolean> renderBreadcrumbs = sgRender.add(new BoolSetting.Builder()
+        .name("render-breadcrumbs")
+        .description("Draw a trail showing the walker's path for debugging.")
+        .defaultValue(false)
+        .visible(() -> entryMode.get() == EntryMode.Walk)
+        .build()
+    );
+
+    private final Setting<SettingColor> breadcrumbColor = sgRender.add(new ColorSetting.Builder()
+        .name("breadcrumb-color")
+        .description("Color of the breadcrumb trail.")
+        .defaultValue(new SettingColor(255, 255, 255, 150))
+        .visible(() -> renderBreadcrumbs.get() && entryMode.get() == EntryMode.Walk)
+        .build()
+    );
+
+    // ── Settings — Glow ────────────────────────────────────────────
     private final Setting<Integer> glowLayers = sgGlow.add(new IntSetting.Builder()
         .name("glow-layers")
         .description("Number of bloom layers rendered around each preview block.")
@@ -199,10 +188,7 @@ public class PortalMaker extends Module {
         .build()
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // State
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── State ──────────────────────────────────────────────────────
     public final List<BlockPos> portalFramePositions = new ArrayList<>();
     private int     placementIndex   = 0;
     private int     tickTimer        = 0;
@@ -219,23 +205,15 @@ public class PortalMaker extends Module {
     private boolean wasRecyclePressed = false;
     private final List<Vec3d> breadcrumbs = new ArrayList<>();
 
-    /** Ticks the player has been roughly stationary while walking to portal. */
-    private int   stuckTicks        = 0;
+    private int   stuckTicks        = 0; // Stationary ticks during walker logic
     private Vec3d lastPos           = null;
     private int   scaffoldCooldown  = 0;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Constructor
-    // ═══════════════════════════════════════════════════════════════════════════
 
     public PortalMaker() {
         super(HuntingUtilities.CATEGORY, "portal-maker", "Builds and lights a minimal Nether portal (10 obsidian).");
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Lifecycle
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Lifecycle ──────────────────────────────────────────────────
     @Override
     public void onActivate() {
         portalFramePositions.clear();
@@ -328,10 +306,7 @@ public class PortalMaker extends Module {
         stopMovement();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Tick
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Event Handlers ─────────────────────────────────────────────
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
@@ -460,6 +435,35 @@ public class PortalMaker extends Module {
         handlePhase2();
     }
 
+    @EventHandler
+    private void onRender(Render3DEvent event) {
+        if (render.get() && !portalFramePositions.isEmpty()) {
+            for (int i = placementIndex; i < portalFramePositions.size(); i++) {
+                BlockPos pos = portalFramePositions.get(i);
+                if (!mc.world.getBlockState(pos).isReplaceable()) continue;
+
+                Box box = new Box(pos);
+                renderGlowLayers(event, box, lineColor.get());
+                event.renderer.box(box, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
+            }
+        }
+
+        if (renderBreadcrumbs.get() && breadcrumbs.size() > 1) {
+            Vec3d prev = null;
+            for (Vec3d pos : breadcrumbs) {
+                if (prev != null) {
+                    event.renderer.line(prev.x, prev.y, prev.z, pos.x, pos.y, pos.z, breadcrumbColor.get());
+                }
+                prev = pos;
+            }
+            if (prev != null && mc.player != null) {
+                Vec3d current = mc.player.getLerpedPos(event.tickDelta);
+                event.renderer.line(prev.x, prev.y, prev.z, current.x, current.y, current.z, breadcrumbColor.get());
+            }
+        }
+    }
+
+    // ── Building Logic ─────────────────────────────────────────────
     private void handlePhase2() {
         if (!portalLitDetected) {
             finishTimer = 0;
@@ -477,6 +481,7 @@ public class PortalMaker extends Module {
         }
     }
 
+    // ── Recycle Logic ──────────────────────────────────────────────
     private void handleRecycle() {
         switch (recycleState) {
             case STEPPING_OUT -> {
@@ -568,10 +573,7 @@ public class PortalMaker extends Module {
         return mc.world.getBlockState(bp).isReplaceable() && mc.world.getBlockState(bp.up()).isReplaceable();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Portal Logic
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Portal Helpers ─────────────────────────────────────────────
     private boolean isPlayerInPortal() {
         BlockPos feet = mc.player.getBlockPos();
         return mc.world.getBlockState(feet).isOf(Blocks.NETHER_PORTAL) ||
@@ -613,10 +615,7 @@ public class PortalMaker extends Module {
                mc.world.getBlockState(p2).getBlock() == Blocks.NETHER_PORTAL;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Portal Entry Movement
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Movement Engine ────────────────────────────────────────────
     private void moveToPortal() {
         if (portalFramePositions.size() < 2) return;
         moveTo(getPortalOpeningCenter());
@@ -749,10 +748,6 @@ public class PortalMaker extends Module {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Geometry helpers
-    // ═══════════════════════════════════════════════════════════════════════════
-
     private Vec3d getPortalOpeningCenter() {
         BlockPos p1 = portalFramePositions.get(0).up();
         BlockPos p2 = portalFramePositions.get(1).up();
@@ -805,10 +800,7 @@ public class PortalMaker extends Module {
         return false;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Block Placement Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Placement Helpers ──────────────────────────────────────────
     private void stopMovement() {
         mc.options.forwardKey.setPressed(false);
         mc.options.backKey.setPressed(false);
@@ -858,42 +850,7 @@ public class PortalMaker extends Module {
         return true;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Render
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    @EventHandler
-    private void onRender(Render3DEvent event) {
-        if (render.get() && !portalFramePositions.isEmpty()) {
-            for (int i = placementIndex; i < portalFramePositions.size(); i++) {
-                BlockPos pos = portalFramePositions.get(i);
-                if (!mc.world.getBlockState(pos).isReplaceable()) continue;
-
-                Box box = new Box(pos);
-                renderGlowLayers(event, box, lineColor.get());
-                event.renderer.box(box, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
-            }
-        }
-
-        if (renderBreadcrumbs.get() && breadcrumbs.size() > 1) {
-            Vec3d prev = null;
-            for (Vec3d pos : breadcrumbs) {
-                if (prev != null) {
-                    event.renderer.line(prev.x, prev.y, prev.z, pos.x, pos.y, pos.z, breadcrumbColor.get());
-                }
-                prev = pos;
-            }
-            if (prev != null && mc.player != null) {
-                Vec3d current = mc.player.getLerpedPos(event.tickDelta);
-                event.renderer.line(prev.x, prev.y, prev.z, current.x, current.y, current.z, breadcrumbColor.get());
-            }
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Bloom Rendering
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Render Helpers ─────────────────────────────────────────────
     private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
         int    layers    = glowLayers.get();
         double spread    = glowSpread.get();
@@ -911,18 +868,11 @@ public class PortalMaker extends Module {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Color Helper
-    // ═══════════════════════════════════════════════════════════════════════════
-
     private SettingColor withAlpha(SettingColor color, int alpha) {
         return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Inventory Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ── Utility Helpers ────────────────────────────────────────────
     private boolean selectHotbarItem(Item targetItem) {
         for (int i = 0; i < 9; i++) {
             if (mc.player.getInventory().getStack(i).getItem() == targetItem) {

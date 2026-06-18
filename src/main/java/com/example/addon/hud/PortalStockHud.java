@@ -29,6 +29,25 @@ public class PortalStockHud extends HudElement {
     private final SettingGroup sgGeneral  = settings.getDefaultGroup();
     private final SettingGroup sgWarnings = settings.createGroup("Warnings");
 
+    // ── Layout ────────────────────────────────────────────────────────────────
+
+    public enum Layout { Inline, Stacked, StackedIcons }
+
+    private final Setting<Layout> layout = sgGeneral.add(new EnumSetting.Builder<Layout>()
+        .name("layout")
+        .description("How the data is presented.")
+        .defaultValue(Layout.StackedIcons)
+        .build()
+    );
+
+    private final Setting<SettingColor> separatorColor = sgGeneral.add(new ColorSetting.Builder()
+        .name("separator-color")
+        .description("Color of the | separators.")
+        .defaultValue(new SettingColor(100, 100, 100, 255))
+        .visible(() -> layout.get() == Layout.Inline)
+        .build()
+    );
+
     // ── Visual settings ───────────────────────────────────────────────────────
 
     private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
@@ -52,6 +71,7 @@ public class PortalStockHud extends HudElement {
         .name("label-mode")
         .description("Show the item label as text, icon, or both.")
         .defaultValue(LabelMode.Both)
+        .visible(() -> layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline)
         .build()
     );
 
@@ -61,7 +81,7 @@ public class PortalStockHud extends HudElement {
         .name("icon-position")
         .description("Where the item icon appears relative to the text.")
         .defaultValue(IconPosition.Left)
-        .visible(() -> labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
 
@@ -69,7 +89,7 @@ public class PortalStockHud extends HudElement {
         .name("icon-scale")
         .description("Scale of the item icons.")
         .defaultValue(1.5).min(0.5).sliderRange(0.5, 4.0)
-        .visible(() -> labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
 
@@ -77,7 +97,7 @@ public class PortalStockHud extends HudElement {
         .name("icon-gap")
         .description("Gap in pixels between the icon and the text.")
         .defaultValue(4.0).min(0).sliderRange(0, 16)
-        .visible(() -> labelMode.get() != LabelMode.Text)
+        .visible(() -> (layout.get() == Layout.StackedIcons || layout.get() == Layout.Inline) && labelMode.get() != LabelMode.Text)
         .build()
     );
 
@@ -221,6 +241,8 @@ public class PortalStockHud extends HudElement {
 
     public List<BlockPos> portalFramePositions = new ArrayList<>();
 
+    private record Stat(String label, String value, ItemStack icon, SettingColor valColor) {}
+
     public PortalStockHud() { super(INFO); }
 
     // ── Render ────────────────────────────────────────────────────────────────
@@ -229,6 +251,89 @@ public class PortalStockHud extends HudElement {
     public void render(HudRenderer renderer) {
         if (mc.player == null) { setSize(0, 0); return; }
 
+        if (layout.get() == Layout.Inline) renderInline(renderer);
+        else renderStacked(renderer, layout.get() == Layout.StackedIcons);
+    }
+
+    private void renderInline(HudRenderer renderer) {
+        double s = scale.get(), padH = 4 * s, padV = 2 * s, lh = renderer.textHeight(false, s), sepW = renderer.textWidth(" | ", false, s);
+        double iconSz = 16.0 * iconScale.get(), iconGap = iconGapSetting.get() * s;
+        LabelMode mode = labelMode.get(); boolean showIcon = mode != LabelMode.Text, showLabel = mode != LabelMode.Icon;
+        IconPosition iconPos = iconPosition.get(); double effIconGap = showIcon ? iconGap : 0;
+
+        List<Stat> segments = new ArrayList<>();
+
+        if (showEnderChestCount.get()) {
+            int count = countItem(Items.ENDER_CHEST);
+            if (!hideEnderIfZero.get() || count > 0 || isInEditor()) {
+                SettingColor col = valueColor.get();
+                if (count <= enderCriticalThreshold.get()) col = enderCriticalColor.get();
+                else if (count <= enderWarningThreshold.get()) col = enderWarningColor.get();
+                segments.add(new Stat("Ender Chests: ", String.valueOf(count), new ItemStack(Items.ENDER_CHEST), col));
+            }
+        }
+
+        if (showObsidianCount.get()) {
+            int count = countItem(Items.OBSIDIAN);
+            if (!hideObsidianIfZero.get() || count > 0 || isInEditor()) {
+                SettingColor col = valueColor.get();
+                if (count <= criticalThreshold.get()) col = criticalColor.get();
+                else if (count <= warningThreshold.get()) col = warningColor.get();
+                segments.add(new Stat("Obsidian: ", String.valueOf(count), new ItemStack(Items.OBSIDIAN), col));
+            }
+        }
+
+        if (showPortalProgress.get() && !portalFramePositions.isEmpty() && mc.world != null) {
+            int total = portalFramePositions.size(), placed = 0;
+            for (BlockPos pos : portalFramePositions) if (mc.world.getBlockState(pos).isOf(Blocks.OBSIDIAN)) placed++;
+            double pct = (double) placed / total;
+            SettingColor col = pct >= 1.0 ? new SettingColor(60, 255, 60, 255) : pct > 0.4 ? new SettingColor(255, 165, 0, 255) : new SettingColor(255, 60, 60, 255);
+            segments.add(new Stat("Portal: ", placed + "/" + total, new ItemStack(Items.OBSIDIAN), col));
+        }
+
+        if (segments.isEmpty()) { setSize(0, 0); return; }
+
+        double totalW = 0, rowH = showIcon ? Math.max(lh, iconSz) : lh;
+        for (int i = 0; i < segments.size(); i++) {
+            Stat st = segments.get(i);
+            double segW = 0;
+            if (showLabel) segW += renderer.textWidth(st.label, false, s);
+            segW += renderer.textWidth(st.value, false, s);
+            if (showIcon) segW += iconSz + effIconGap;
+            totalW += segW;
+            if (i < segments.size() - 1) totalW += sepW;
+        }
+        setSize(totalW + padH * 2, rowH + padV * 2);
+
+        if (showBackground.get()) renderer.quad(x, y, getWidth(), getHeight(), backgroundColor.get());
+
+        double cx = x + padH, rowY = y + padV;
+        for (int i = 0; i < segments.size(); i++) {
+            Stat st = segments.get(i);
+            if (showIcon && iconPos == IconPosition.Left) {
+                renderer.item(st.icon, (int) cx, (int) (rowY + (rowH - iconSz) / 2.0), iconScale.get().floatValue(), false);
+                cx += iconSz + effIconGap;
+            }
+            if (showLabel) {
+                renderer.text(st.label, cx, rowY + (rowH - lh) / 2.0, labelColor.get(), false, s);
+                cx += renderer.textWidth(st.label, false, s);
+            }
+            renderer.text(st.value, cx, rowY + (rowH - lh) / 2.0, st.valColor, false, s);
+            cx += renderer.textWidth(st.value, false, s);
+
+            if (showIcon && iconPos != IconPosition.Left) {
+                cx += effIconGap;
+                renderer.item(st.icon, (int) cx, (int) (rowY + (rowH - iconSz) / 2.0), iconScale.get().floatValue(), false);
+                cx += iconSz;
+            }
+            if (i < segments.size() - 1) {
+                renderer.text(" | ", cx, rowY + (rowH - lh) / 2.0, separatorColor.get(), false, s);
+                cx += sepW;
+            }
+        }
+    }
+
+    private void renderStacked(HudRenderer renderer, boolean withIcons) {
         double s           = scale.get();
         double padH        = 4 * s;
         double padV        = 2 * s;
@@ -237,9 +342,9 @@ public class PortalStockHud extends HudElement {
         double iconSz      = 16.0 * iconScale.get();
         double iconGap     = iconGapSetting.get() * s;
 
-        LabelMode    mode         = labelMode.get();
-        IconPosition iconPos      = iconPosition.get();
-        boolean      showIcon     = mode != LabelMode.Text;
+        LabelMode    mode         = withIcons ? labelMode.get() : LabelMode.Text;
+        IconPosition iconPos      = withIcons ? iconPosition.get() : IconPosition.Left;
+        boolean      showIcon     = withIcons && mode != LabelMode.Text;
         boolean      showText     = mode != LabelMode.Icon;
         boolean      iconVertical = showIcon && (iconPos == IconPosition.Above || iconPos == IconPosition.Below);
 

@@ -1,6 +1,6 @@
 package com.example.addon.mixin;
 
-import com.example.addon.modules.PortalTracker;
+import com.example.addon.modules.EightToOne;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.network.ClientPlayerEntity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -26,8 +26,8 @@ public class ClientPlayerEntityMixin {
     @Inject(method = "tickNausea", at = @At("HEAD"), cancellable = true)
     private void onTickNausea(boolean fromPortalEffect, CallbackInfo ci) {
         if (!fromPortalEffect) return;
-        PortalTracker portalTracker = Modules.get().get(PortalTracker.class);
-        if (portalTracker != null && portalTracker.isPortalGuiEnabled()) {
+        EightToOne eto = Modules.get().get(EightToOne.class);
+        if (eto != null && eto.isPortalGuiEnabled()) {
             this.prevNauseaIntensity = this.nauseaIntensity;
             this.nauseaIntensity = 0.0f;
             ci.cancel();
