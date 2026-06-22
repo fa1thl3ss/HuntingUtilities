@@ -10,6 +10,7 @@ import com.example.addon.HuntingUtilities;
 import com.example.addon.modules.NeighbourhoodWatch;
 import com.example.addon.modules.NeighbourhoodWatch.PlayerStatus;
 
+import meteordevelopment.meteorclient.renderer.Renderer2D;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
@@ -650,21 +651,26 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 statusTag(np.status()) + " " + np.name(), 1, np.dist()));
         }
 
-        // ── Gather tab-list counts ────────────────────────────────────────────
+        // ── Gather tab-list names by category ─────────────────────────────────
 
-        int onlineFriends = 0, onlineEnemies = 0, onlineProxies = 0;
+        List<String> onlineFriendNames = new ArrayList<>();
+        List<String> onlineEnemyNames  = new ArrayList<>();
+        List<String> onlineProxyNames  = new ArrayList<>();
 
         if (moduleActive && showOnline.get() && mc.getNetworkHandler() != null) {
             for (PlayerListEntry entry : mc.getNetworkHandler().getPlayerList()) {
                 String name = entry.getProfile().getName();
                 if (name == null || name.isEmpty()) continue;
                 switch (module.getPlayerStatusPublic(name)) {
-                    case Friend -> onlineFriends++;
-                    case Enemy  -> onlineEnemies++;
-                    case Proxy  -> onlineProxies++;
+                    case Friend -> onlineFriendNames.add(name);
+                    case Enemy  -> onlineEnemyNames.add(name);
+                    case Proxy  -> onlineProxyNames.add(name);
                     default     -> {}
                 }
             }
+            onlineFriendNames.sort(Comparator.naturalOrder());
+            onlineEnemyNames.sort(Comparator.naturalOrder());
+            onlineProxyNames.sort(Comparator.naturalOrder());
         }
 
         // ── Gather nearby fireworks ───────────────────────────────────────────
@@ -911,7 +917,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
 
         boolean hasNearbySection   = showNearby.get() && !nearbyList.isEmpty();
         boolean hasOnlineSection   = moduleActive && showOnline.get()
-            && (onlineFriends > 0 || onlineEnemies > 0 || onlineProxies > 0);
+            && (!onlineFriendNames.isEmpty() || !onlineEnemyNames.isEmpty() || !onlineProxyNames.isEmpty());
         boolean hasFireworkSection = showFireworks.get() && !fireworkEntries.isEmpty();
         boolean hasPearlSection    = showPearls.get() && pearlCount > 0;
         boolean hasItemSection     = showItems.get() && itemCategory != null;
@@ -955,26 +961,35 @@ public class NeighbourhoodWatchHUD extends HudElement {
             }
         }
 
-        // Online widths
-        double onlineFriendW  = 0;
-        double onlineEnemyW   = 0;
-        double onlineProxyW   = 0;
+        // Online name widths
+        double[] onlineFriendNameWidths = new double[0];
+        double[] onlineEnemyNameWidths  = new double[0];
+        double[] onlineProxyNameWidths  = new double[0];
 
         if (hasOnlineSection) {
-            if (onlineFriends > 0) {
-                onlineFriendW = renderer.textWidth("Friends", false, s)
-                              + renderer.textWidth("  " + onlineFriends, false, s);
-                maxW = Math.max(maxW, onlineFriendW);
+            if (!onlineFriendNames.isEmpty()) {
+                onlineFriendNameWidths = new double[onlineFriendNames.size()];
+                for (int i = 0; i < onlineFriendNames.size(); i++) {
+                    double w = renderer.textWidth(onlineFriendNames.get(i), false, s);
+                    onlineFriendNameWidths[i] = w;
+                    maxW = Math.max(maxW, w);
+                }
             }
-            if (onlineEnemies > 0) {
-                onlineEnemyW = renderer.textWidth("Enemies", false, s)
-                             + renderer.textWidth("  " + onlineEnemies, false, s);
-                maxW = Math.max(maxW, onlineEnemyW);
+            if (!onlineEnemyNames.isEmpty()) {
+                onlineEnemyNameWidths = new double[onlineEnemyNames.size()];
+                for (int i = 0; i < onlineEnemyNames.size(); i++) {
+                    double w = renderer.textWidth(onlineEnemyNames.get(i), false, s);
+                    onlineEnemyNameWidths[i] = w;
+                    maxW = Math.max(maxW, w);
+                }
             }
-            if (onlineProxies > 0) {
-                onlineProxyW = renderer.textWidth("Proxies", false, s)
-                             + renderer.textWidth("  " + onlineProxies, false, s);
-                maxW = Math.max(maxW, onlineProxyW);
+            if (!onlineProxyNames.isEmpty()) {
+                onlineProxyNameWidths = new double[onlineProxyNames.size()];
+                for (int i = 0; i < onlineProxyNames.size(); i++) {
+                    double w = renderer.textWidth(onlineProxyNames.get(i), false, s);
+                    onlineProxyNameWidths[i] = w;
+                    maxW = Math.max(maxW, w);
+                }
             }
         }
 
@@ -1097,9 +1112,9 @@ public class NeighbourhoodWatchHUD extends HudElement {
             lineCount += nearbyEntries.size();
         }
         if (hasOnlineSection) {
-            if (onlineFriends > 0) lineCount += 1;
-            if (onlineEnemies > 0) lineCount += 1;
-            if (onlineProxies > 0) lineCount += 1;
+            lineCount += onlineFriendNames.size();
+            lineCount += onlineEnemyNames.size();
+            lineCount += onlineProxyNames.size();
         }
         if (hasFireworkSection) {
             if (fwDMode == EntityDisplayMode.Category) lineCount += 1;
@@ -1140,62 +1155,46 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 NearbyPlayer np = nearbyShown.get(i);
                 String distStr  = showDistance.get() ? String.format(" %.0fm", e.nearestDist()) : "";
                 String cntStr   = "";
-                SettingColor col = statusColor(np.status());
-                double rowW     = nearbyRowWidths[i];
-                double rowY     = y + padV + lineIdx * (lineHeight + rowGap);
+                SettingColor nameCol = colorForStatus(np.status());
+                SettingColor metaCol = valueColor.get();
 
-                if (showBackground.get()) {
-                    double bgW = rowW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
+                if (!distStr.isEmpty() && !cntStr.isEmpty()) {
+                    lineIdx = drawTripleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, nearbyRowWidths[i], lineIdx,
+                        e.typeName(), cntStr, distStr, nameCol, metaCol, metaCol);
+                } else if (!distStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, nearbyRowWidths[i], lineIdx,
+                        e.typeName(), distStr, nameCol, metaCol);
+                } else {
+                    lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, nearbyRowWidths[i], lineIdx,
+                        e.typeName(), nameCol);
                 }
-
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    e.typeName(), cntStr, distStr, rowW,
-                    col, labelColor.get(), lineIdx);
             }
         }
 
         // ── Draw: Online section ──────────────────────────────────────────────
 
         if (hasOnlineSection) {
-            // Friends row
-            if (onlineFriends > 0) {
-                double rowY = y + padV + lineIdx * (lineHeight + rowGap);
-                if (showBackground.get()) {
-                    double bgW = onlineFriendW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
-                }
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    "Friends", "", "  " + onlineFriends,
-                    onlineFriendW, friendColor.get(), valueColor.get(), lineIdx);
+            for (int i = 0; i < onlineFriendNames.size(); i++) {
+                lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                    align, totalW, onlineFriendNameWidths[i], lineIdx,
+                    onlineFriendNames.get(i), friendColor.get());
             }
-
-            // Enemies row
-            if (onlineEnemies > 0) {
-                double rowY = y + padV + lineIdx * (lineHeight + rowGap);
-                if (showBackground.get()) {
-                    double bgW = onlineEnemyW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
-                }
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    "Enemies", "", "  " + onlineEnemies,
-                    onlineEnemyW, enemyColor.get(), valueColor.get(), lineIdx);
+            for (int i = 0; i < onlineEnemyNames.size(); i++) {
+                lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                    align, totalW, onlineEnemyNameWidths[i], lineIdx,
+                    onlineEnemyNames.get(i), enemyColor.get());
             }
-
-            // Proxies row
-            if (onlineProxies > 0) {
-                double rowY = y + padV + lineIdx * (lineHeight + rowGap);
-                if (showBackground.get()) {
-                    double bgW = onlineProxyW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
-                }
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    "Proxies", "", "  " + onlineProxies,
-                    onlineProxyW, proxyColor.get(), valueColor.get(), lineIdx);
+            for (int i = 0; i < onlineProxyNames.size(); i++) {
+                lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                    align, totalW, onlineProxyNameWidths[i], lineIdx,
+                    onlineProxyNames.get(i), proxyColor.get());
             }
         }
 
-        // ── Draw: Firework section ────────────────────────────────────────────
+        // ── Draw: Fireworks section ───────────────────────────────────────────
 
         if (hasFireworkSection) {
             if (fwDMode == EntityDisplayMode.Category) {
@@ -1209,21 +1208,31 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 FireworkEntry fe = fireworksShown.get(i);
                 String cntStr   = showFireworkCount.get()    ? " x" + fe.count()                        : "";
                 String distStr  = showFireworkDistance.get() ? String.format(" %.0fm", fe.nearestDist()) : "";
-                double rowW     = fwRowWidths[i];
-                double rowY     = y + padV + lineIdx * (lineHeight + rowGap);
 
-                if (showBackground.get()) {
-                    double bgW = rowW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
+                if (!cntStr.isEmpty() && !distStr.isEmpty()) {
+                    lineIdx = drawTripleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, fwRowWidths[i], lineIdx,
+                        fe.shooterName(), cntStr, distStr,
+                        fireworkColor.get(), fireworkMetaColor.get(), fireworkMetaColor.get());
+                } else if (!distStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, fwRowWidths[i], lineIdx,
+                        fe.shooterName(), distStr,
+                        fireworkColor.get(), fireworkMetaColor.get());
+                } else if (!cntStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, fwRowWidths[i], lineIdx,
+                        fe.shooterName(), cntStr,
+                        fireworkColor.get(), fireworkMetaColor.get());
+                } else {
+                    lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, fwRowWidths[i], lineIdx,
+                        fe.shooterName(), fireworkColor.get());
                 }
-
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    fe.shooterName(), cntStr, distStr, rowW,
-                    fireworkColor.get(), fireworkMetaColor.get(), lineIdx);
             }
         }
 
-        // ── Draw: Pearl section ───────────────────────────────────────────────
+        // ── Draw: Pearls section ──────────────────────────────────────────────
 
         if (hasPearlSection) {
             if (pDMode == EntityDisplayMode.Category) {
@@ -1234,137 +1243,232 @@ public class NeighbourhoodWatchHUD extends HudElement {
 
             String cntStr  = " x" + pearlCount;
             String distStr = showPearlDistance.get() ? String.format(" %.0fm", pearlNearest) : "";
-            double rowY    = y + padV + lineIdx * (lineHeight + rowGap);
 
-            if (showBackground.get()) {
-                double bgW = pearlRowW + padH * 2;
-                renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
+            if (!distStr.isEmpty()) {
+                lineIdx = drawTripleText(renderer, s, padH, padV, rowGap, lineHeight,
+                    align, totalW, pearlRowW, lineIdx,
+                    "Nearby Pearls", cntStr, distStr,
+                    pearlColor.get(), pearlMetaColor.get(), pearlMetaColor.get());
+            } else {
+                lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                    align, totalW, pearlRowW, lineIdx,
+                    "Nearby Pearls", cntStr,
+                    pearlColor.get(), pearlMetaColor.get());
             }
-
-            lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                "Nearby Pearls", cntStr, distStr, pearlRowW,
-                pearlColor.get(), pearlMetaColor.get(), lineIdx);
         }
 
-        // ── Draw: Logout section ──────────────────────────────────────────────
+        // ── Draw: Logouts section ─────────────────────────────────────────────
 
         if (hasLogoutSection) {
             for (int i = 0; i < logoutList.size(); i++) {
                 NeighbourhoodWatch.LogoutRecord r = logoutList.get(i);
                 long elapsed = (System.currentTimeMillis() - r.time()) / 1000;
-                String timeStr = formatTime(elapsed);
-                String posStr = module.formatPos(r.pos());
-                String label = r.name();
-                
-                double rowW = logoutRowWidths[i];
-                double rowY = y + padV + lineIdx * (lineHeight + rowGap);
-
-                if (showBackground.get()) {
-                    double bgW = rowW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
-                }
-
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    label, posStr, " " + timeStr, rowW, enemyColor.get(), labelColor.get(), lineIdx);
+                String label = String.format("%s %s %s", r.name(), module.formatPos(r.pos()), formatTime(elapsed));
+                lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                    align, totalW, logoutRowWidths[i], lineIdx, label, enemyColor.get());
             }
         }
 
-        // ── Draw: Item section ────────────────────────────────────────────────
+        // ── Draw: Items section ───────────────────────────────────────────────
 
         if (hasItemSection) {
             if (iDMode == EntityDisplayMode.Category) {
                 lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
-                    align, totalW, itemHeaderW, lineIdx, itemCategory.header(), headerColor.get());
+                    align, totalW, itemHeaderW, lineIdx,
+                    itemCategory.header(), headerColor.get());
             }
 
             for (int i = 0; i < itemsShown.size(); i++) {
-                TrackedEntry e  = itemsShown.get(i);
-                String countStr = showItemCount.get()    ? " x" + e.count()                         : "";
-                String distStr  = showItemDistance.get() ? String.format(" %.0fm", e.nearestDist()) : "";
-                double rowW     = itemRowWidths[i];
-                double rowY     = y + padV + lineIdx * (lineHeight + rowGap);
+                TrackedEntry e = itemsShown.get(i);
+                String cntStr  = showItemCount.get()    ? " x" + e.count()                        : "";
+                String distStr = showItemDistance.get() ? String.format(" %.0fm", e.nearestDist()) : "";
 
-                if (showBackground.get()) {
-                    double bgW = rowW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
+                if (!cntStr.isEmpty() && !distStr.isEmpty()) {
+                    lineIdx = drawTripleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, itemRowWidths[i], lineIdx,
+                        e.typeName(), cntStr, distStr,
+                        itemColor.get(), itemCountColor.get(), itemCountColor.get());
+                } else if (!distStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, itemRowWidths[i], lineIdx,
+                        e.typeName(), distStr,
+                        itemColor.get(), itemCountColor.get());
+                } else if (!cntStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, itemRowWidths[i], lineIdx,
+                        e.typeName(), cntStr,
+                        itemColor.get(), itemCountColor.get());
+                } else {
+                    lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, itemRowWidths[i], lineIdx,
+                        e.typeName(), itemColor.get());
                 }
-
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    e.typeName(), countStr, distStr, rowW,
-                    itemColor.get(), itemCountColor.get(), lineIdx);
             }
         }
 
-        // ── Draw: Entity categories ───────────────────────────────────────────
+        // ── Draw: Entities section ────────────────────────────────────────────
 
         for (int ci = 0; ci < entityCategories.size(); ci++) {
-            TrackedCategory cat  = entityCategories.get(ci);
-            SettingColor nameCol = cat.nameColor();
+            TrackedCategory cat = entityCategories.get(ci);
 
             if (eDMode == EntityDisplayMode.Category) {
                 lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
-                    align, totalW, entityCatHeaderW[ci], lineIdx, cat.header(), headerColor.get());
+                    align, totalW, entityCatHeaderW[ci], lineIdx,
+                    cat.header(), headerColor.get());
             }
 
             int shown = Math.min(cat.entries().size(), maxEntityRows.get());
             for (int ei = 0; ei < shown; ei++) {
-                TrackedEntry ee = cat.entries().get(ei);
-                String cntStr  = showEntityCount.get()    ? " x" + ee.count()                         : "";
-                String distStr = showEntityDistance.get() ? String.format(" %.0fm", ee.nearestDist()) : "";
-                double rowW    = entityEntryW[ci][ei];
-                double rowY    = y + padV + lineIdx * (lineHeight + rowGap);
+                TrackedEntry ee  = cat.entries().get(ei);
+                String cntStr    = showEntityCount.get()    ? " x" + ee.count()                        : "";
+                String distStr   = showEntityDistance.get() ? String.format(" %.0fm", ee.nearestDist()) : "";
 
-                if (showBackground.get()) {
-                    double bgW = rowW + padH * 2;
-                    renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
+                if (!cntStr.isEmpty() && !distStr.isEmpty()) {
+                    lineIdx = drawTripleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, entityEntryW[ci][ei], lineIdx,
+                        ee.typeName(), cntStr, distStr,
+                        cat.nameColor(), entityMetaColor.get(), entityMetaColor.get());
+                } else if (!distStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, entityEntryW[ci][ei], lineIdx,
+                        ee.typeName(), distStr,
+                        cat.nameColor(), entityMetaColor.get());
+                } else if (!cntStr.isEmpty()) {
+                    lineIdx = drawPairedText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, entityEntryW[ci][ei], lineIdx,
+                        ee.typeName(), cntStr,
+                        cat.nameColor(), entityMetaColor.get());
+                } else {
+                    lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                        align, totalW, entityEntryW[ci][ei], lineIdx,
+                        ee.typeName(), cat.nameColor());
                 }
-
-                lineIdx = drawTrackedEntryRow(renderer, s, align, totalW, padH, rowY,
-                    ee.typeName(), cntStr, distStr, rowW,
-                    nameCol, entityMetaColor.get(), lineIdx);
             }
         }
 
-        // ── Draw: Safety notice ───────────────────────────────────────────────
+        // ── Draw: Safety line ─────────────────────────────────────────────────
 
         if (hasSafetyLine) {
-            double rowY = y + padV + lineIdx * (lineHeight + rowGap);
-            if (showBackground.get()) {
-                double bgW = safetyW + padH * 2;
-                renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
-            }
-            double tx = switch (align) {
-                case Right  -> x + totalW - padH - safetyW;
-                case Center -> x + (totalW - safetyW) / 2.0;
-                case Left   -> x + padH;
-            };
-            renderer.text("! Safety Armed", tx, rowY, safetyColor.get(), false, s);
-            lineIdx++;
+            lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
+                align, totalW, safetyW, lineIdx, "! Safety Armed", safetyColor.get());
         }
 
         setSize(totalW, totalH);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Entity/item building helpers
+    // Drawing helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private TrackedCategory buildMobCategory(
-            List<? extends MobEntity> mobs,
-            String categoryLabel,
-            SettingColor nameColor) {
+    private int drawSingleText(HudRenderer renderer, double s, double padH, double padV,
+                               double rowGap, double lineHeight, Alignment align,
+                               double totalW, double rowW, int lineIdx,
+                               String text, SettingColor color) {
+        double textX = x + padH + alignOffset(align, totalW - padH * 2, rowW);
+        double textY = y + padV + lineIdx * (lineHeight + rowGap);
 
+        if (showBackground.get()) {
+            Renderer2D.COLOR.quad(x, textY, totalW, lineHeight, backgroundColor.get());
+        }
+
+        renderer.text(text, textX, textY, color, false, s);
+        return lineIdx + 1;
+    }
+
+    private int drawPairedText(HudRenderer renderer, double s, double padH, double padV,
+                               double rowGap, double lineHeight, Alignment align,
+                               double totalW, double rowW, int lineIdx,
+                               String left, String right,
+                               SettingColor leftColor, SettingColor rightColor) {
+        double leftW  = renderer.textWidth(left, false, s);
+        double sepW   = renderer.textWidth(" ", false, s);
+        double textX  = x + padH + alignOffset(align, totalW - padH * 2, rowW);
+        double textY  = y + padV + lineIdx * (lineHeight + rowGap);
+
+        if (showBackground.get()) {
+            Renderer2D.COLOR.quad(x, textY, totalW, lineHeight, backgroundColor.get());
+        }
+
+        renderer.text(left, textX, textY, leftColor, false, s);
+        renderer.text(right, textX + leftW + sepW, textY, rightColor, false, s);
+        return lineIdx + 1;
+    }
+
+    private int drawTripleText(HudRenderer renderer, double s, double padH, double padV,
+                               double rowGap, double lineHeight, Alignment align,
+                               double totalW, double rowW, int lineIdx,
+                               String first, String second, String third,
+                               SettingColor firstColor, SettingColor secondColor, SettingColor thirdColor) {
+        double firstW  = renderer.textWidth(first, false, s);
+        double sepW    = renderer.textWidth(" ", false, s);
+        double secondW = renderer.textWidth(second, false, s);
+        double textX   = x + padH + alignOffset(align, totalW - padH * 2, rowW);
+        double textY   = y + padV + lineIdx * (lineHeight + rowGap);
+
+        if (showBackground.get()) {
+            Renderer2D.COLOR.quad(x, textY, totalW, lineHeight, backgroundColor.get());
+        }
+
+        renderer.text(first, textX, textY, firstColor, false, s);
+        renderer.text(second, textX + firstW + sepW, textY, secondColor, false, s);
+        renderer.text(third, textX + firstW + sepW + secondW + sepW, textY, thirdColor, false, s);
+        return lineIdx + 1;
+    }
+
+    private double alignOffset(Alignment align, double containerW, double contentW) {
+        return switch (align) {
+            case Center -> (containerW - contentW) / 2.0;
+            case Right  -> containerW - contentW;
+            default     -> 0;
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Misc helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private SettingColor colorForStatus(PlayerStatus status) {
+        return switch (status) {
+            case Friend -> friendColor.get();
+            case Enemy  -> enemyColor.get();
+            case Proxy  -> proxyColor.get();
+            default     -> otherColor.get();
+        };
+    }
+
+    private String statusTag(PlayerStatus status) {
+        return switch (status) {
+            case Friend -> "[F]";
+            case Enemy  -> "[E]";
+            case Proxy  -> "[P]";
+            default     -> "[?]";
+        };
+    }
+
+    private String formatTime(long totalSeconds) {
+        if (totalSeconds < 60) return totalSeconds + "s";
+        long mins = totalSeconds / 60;
+        long secs = totalSeconds % 60;
+        if (mins < 60) return mins + "m" + secs + "s";
+        long hrs = mins / 60;
+        mins = mins % 60;
+        return hrs + "h" + mins + "m";
+    }
+
+    private TrackedCategory buildMobCategory(List<? extends MobEntity> mobs, String label, SettingColor col) {
         if (mobs.isEmpty()) return null;
 
         Map<String, int[]>   countMap = new LinkedHashMap<>();
         Map<String, float[]> distMap  = new LinkedHashMap<>();
+        int total = 0;
 
-        for (MobEntity mob : mobs) {
-            String typeName = mob.getType().getName().getString();
-            float  dist     = (float) mc.player.getPos().distanceTo(mob.getPos());
+        for (MobEntity e : mobs) {
+            String typeName = e.getType().getName().getString();
+            float dist = (float) mc.player.getPos().distanceTo(e.getPos());
             countMap.computeIfAbsent(typeName, k -> new int[]{0})[0]++;
             distMap.computeIfAbsent(typeName, k -> new float[]{Float.MAX_VALUE});
             if (dist < distMap.get(typeName)[0]) distMap.get(typeName)[0] = dist;
+            total++;
         }
 
         List<TrackedEntry> entries = new ArrayList<>();
@@ -1373,100 +1477,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
         }
         entries.sort(Comparator.comparingDouble(TrackedEntry::nearestDist));
 
-        String header = categoryLabel + ": " + mobs.size()
-            + (mobs.size() == 1 ? " mob" : " mobs");
-
-        return new TrackedCategory(header, mobs.size(), entries, nameColor);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Draw helpers
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private int drawTrackedEntryRow(HudRenderer renderer, double s,
-                                    Alignment align, double totalW, double padH,
-                                    double rowY,
-                                    String typeName, String cntStr, String distStr,
-                                    double rowW,
-                                    SettingColor nameColor, SettingColor metaColor,
-                                    int lineIdx) {
-        if (align == Alignment.Right) {
-            double cx = x + totalW - padH;
-            double dw = renderer.textWidth(distStr,  false, s);
-            double cw = renderer.textWidth(cntStr,   false, s);
-            double nw = renderer.textWidth(typeName, false, s);
-            cx -= dw; renderer.text(distStr,  cx, rowY, metaColor,  false, s);
-            cx -= cw; renderer.text(cntStr,   cx, rowY, metaColor,  false, s);
-            cx -= nw; renderer.text(typeName, cx, rowY, nameColor,  false, s);
-        } else if (align == Alignment.Center) {
-            double cx = x + (totalW - rowW) / 2.0;
-            renderer.text(typeName, cx, rowY, nameColor, false, s);
-            cx += renderer.textWidth(typeName, false, s);
-            renderer.text(cntStr,   cx, rowY, metaColor, false, s);
-            cx += renderer.textWidth(cntStr, false, s);
-            renderer.text(distStr,  cx, rowY, metaColor, false, s);
-        } else {
-            double cx = x + padH;
-            renderer.text(typeName, cx, rowY, nameColor, false, s);
-            cx += renderer.textWidth(typeName, false, s);
-            renderer.text(cntStr,   cx, rowY, metaColor, false, s);
-            cx += renderer.textWidth(cntStr, false, s);
-            renderer.text(distStr,  cx, rowY, metaColor, false, s);
-        }
-        return lineIdx + 1;
-    }
-
-    private String formatTime(long seconds) {
-        if (seconds < 60) return seconds + "s";
-        if (seconds < 3600) return (seconds / 60) + "m";
-        return (seconds / 3600) + "h " + ((seconds % 3600) / 60) + "m";
-    }
-
-    private double bgStartX(Alignment align, double totalW, double bgW) {
-        return switch (align) {
-            case Right  -> x + totalW - bgW;
-            case Center -> x + (totalW - bgW) / 2.0;
-            case Left   -> x;
-        };
-    }
-
-    private int drawSingleText(HudRenderer renderer, double s,
-                               double padH, double padV, double rowGap, double lineHeight,
-                               Alignment align, double totalW, double lineW, int lineIdx,
-                               String text, SettingColor color) {
-        double rowY = y + padV + lineIdx * (lineHeight + rowGap);
-        if (showBackground.get()) {
-            double bgW = lineW + padH * 2;
-            renderer.quad(bgStartX(align, totalW, bgW), rowY - 1, bgW, lineHeight + 2, backgroundColor.get());
-        }
-        double tx = switch (align) {
-            case Right  -> x + totalW - padH - lineW;
-            case Center -> x + (totalW - lineW) / 2.0;
-            case Left   -> x + padH;
-        };
-        renderer.text(text, tx, rowY, color, false, s);
-        return lineIdx + 1;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Status helpers
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private String statusTag(PlayerStatus status) {
-        return switch (status) {
-            case Friend -> "[F]";
-            case Enemy  -> "[E]";
-            case Proxy  -> "[P]";
-            case Other  -> "[?]";
-        };
-    }
-
-    private SettingColor statusColor(PlayerStatus status) {
-        return switch (status) {
-            case Friend -> friendColor.get();
-            case Enemy  -> enemyColor.get();
-            case Proxy  -> proxyColor.get();
-            case Other  -> otherColor.get();
-        };
+        String header = label + ": " + total;
+        return new TrackedCategory(header, total, entries, col);
     }
 }

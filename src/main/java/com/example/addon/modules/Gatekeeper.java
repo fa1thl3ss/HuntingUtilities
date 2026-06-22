@@ -28,7 +28,6 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.EndGatewayBlockEntity;
-import net.minecraft.block.entity.EndPortalBlockEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
@@ -350,10 +349,10 @@ public class Gatekeeper extends Module {
         String id = "GW_" + pos.toShortString();
         if (!notifiedStructures.add(id)) return;
         if (gs == GatewayState.BROKEN && (brokenDetection.get() == GateDetectionMode.Notify || brokenDetection.get() == GateDetectionMode.Both))
-            warning("§d§lBroken Gateway §7@ " + pos.toShortString() + " (Void link)");
+            warning("§d§lBroken Gateway §7detected (Void link)");
         else if (gs == GatewayState.FAR_OUT && (farOutDetection.get() == GateDetectionMode.Notify || farOutDetection.get() == GateDetectionMode.Both))
-            warning("§c§lFar-Out Gateway §7@ " + pos.toShortString() + " -> " + dest.toShortString());
-        else info("§dEnd Gateway §7@ " + pos.toShortString() + (dest != null ? " -> " + dest.toShortString() : ""));
+            warning("§c§lFar-Out Gateway §7detected");
+        else info("§dEnd Gateway §7detected");
     }
 
     private BlockPos componentAnchor(Set<BlockPos> comp) {

@@ -41,6 +41,7 @@ import net.minecraft.block.entity.MobSpawnerBlockEntity;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.ExperienceOrbEntity;
 import net.minecraft.entity.mob.EndermiteEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.vehicle.ChestMinecartEntity;
@@ -75,7 +76,8 @@ public class DungeonAssistant extends Module {
         CHEST,
         CHEST_MINECART,
         CUSTOM_BLOCK,
-        MISROTATED_DEEPSLATE
+        MISROTATED_DEEPSLATE,
+        LOW_Y_STONE_DIRT
     }
 
     public enum RenderMode {
@@ -99,6 +101,7 @@ public class DungeonAssistant extends Module {
     private final Set<ChunkPos>              scannedChunks         = new HashSet<>();
     private final Set<BlockPos>              checkedContainers     = new HashSet<>();
     private final List<EndermiteEntity>      endermiteTargets      = new ArrayList<>();
+    private final List<ExperienceOrbEntity>  xpOrbTargets          = new ArrayList<>();
     private final Set<Integer>               notifiedEndermites    = new HashSet<>();
     private final Set<Integer>               checkedEntityIds      = new HashSet<>();
     private final Set<BlockPos>              spawnerTorches        = new HashSet<>();
@@ -141,6 +144,7 @@ public class DungeonAssistant extends Module {
     private final SettingGroup sgChests        = settings.createGroup("Chests");
     private final SettingGroup sgClutterBlocks = settings.createGroup("Clutter Blocks");
     private final SettingGroup sgEndermites    = settings.createGroup("Endermites");
+    private final SettingGroup sgXpOrbs        = settings.createGroup("XP Orbs");
     private final SettingGroup sgSafety        = settings.createGroup("Safety");
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -200,6 +204,14 @@ public class DungeonAssistant extends Module {
         .description("Fill alpha for block targets in SPECTRAL mode (0 = invisible, 30 = subtle).")
         .defaultValue(30).min(0).max(120).sliderMax(80)
         .visible(() -> renderMode.get() == RenderMode.SPECTRAL)
+        .build()
+    );
+
+    // ADDED: Toggleable setting for Steal/Dump buttons
+    private final Setting<Boolean> stealDumpButtons = sgGeneral.add(new BoolSetting.Builder()
+        .name("steal-dump-buttons")
+        .description("Show steal and dump buttons on container screens.")
+        .defaultValue(true)
         .build()
     );
 
@@ -353,6 +365,30 @@ public class DungeonAssistant extends Module {
         .visible(trackMisrotatedDeepslate::get).build()
     );
 
+    private final Setting<Boolean> trackLowYStoneDirt = sgClutterBlocks.add(new BoolSetting.Builder()
+        .name("low-y-stone-dirt")
+        .description("Highlights Stone and Dirt below a specified Y level.")
+        .defaultValue(false)
+        .onChanged(v -> { targets.entrySet().removeIf(e -> e.getValue() == TargetType.LOW_Y_STONE_DIRT); scannedChunks.clear(); })
+        .build()
+    );
+
+    private final Setting<Integer> lowYLevel = sgClutterBlocks.add(new IntSetting.Builder()
+        .name("low-y-level")
+        .description("The Y level below which Stone and Dirt will be highlighted.")
+        .defaultValue(-5).min(-64).max(320)
+        .visible(trackLowYStoneDirt::get)
+        .onChanged(v -> { targets.entrySet().removeIf(e -> e.getValue() == TargetType.LOW_Y_STONE_DIRT); scannedChunks.clear(); })
+        .build()
+    );
+
+    private final Setting<SettingColor> lowYStoneDirtColor = sgClutterBlocks.add(new ColorSetting.Builder()
+        .name("low-y-color")
+        .description("Highlight color for Stone and Dirt below the Y level.")
+        .defaultValue(new SettingColor(128, 128, 128, 255))
+        .visible(trackLowYStoneDirt::get).build()
+    );
+
     private final Setting<Boolean> highlightSpawnerTorches = sgClutterBlocks.add(new BoolSetting.Builder()
         .name("highlight-spawner-torches").description("Highlights torches within 5 blocks of a spawner.")
         .defaultValue(true).visible(trackSpawners::get)
@@ -400,6 +436,24 @@ public class DungeonAssistant extends Module {
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Settings — XP Orbs
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private final Setting<Boolean> trackXpOrbs = sgXpOrbs.add(new BoolSetting.Builder()
+        .name("track-xp-orbs")
+        .description("Highlights Experience Orbs in the world.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<SettingColor> xpOrbColor = sgXpOrbs.add(new ColorSetting.Builder()
+        .name("xp-orb-color")
+        .description("The highlight color for Experience Orbs.")
+        .defaultValue(new SettingColor(255, 255, 0, 255))
+        .visible(trackXpOrbs::get).build()
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Safety
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -434,6 +488,7 @@ public class DungeonAssistant extends Module {
         scannedChunks.clear();
         checkedContainers.clear();
         endermiteTargets.clear();
+        xpOrbTargets.clear();
         notifiedEndermites.clear();
         checkedEntityIds.clear();
         spawnerTorches.clear();
@@ -449,6 +504,8 @@ public class DungeonAssistant extends Module {
                 lastDimension = mc.world.getRegistryKey().getValue().toString();
             }
         }
+        
+        rebuildSpectralRegistry();
     }
 
     @Override
@@ -462,6 +519,7 @@ public class DungeonAssistant extends Module {
         targets.clear();
         checkedContainers.clear();
         endermiteTargets.clear();
+        xpOrbTargets.clear();
         notifiedEndermites.clear();
         checkedEntityIds.clear();
         spawnerTorches.clear();
@@ -539,7 +597,7 @@ public class DungeonAssistant extends Module {
                 if (mc.world.getBlockState(pos).isAir()) { toRemove.add(pos); continue; }
 
                 Block currentBlock = mc.world.getBlockState(pos).getBlock();
-                if (type == TargetType.SPAWNER || type == TargetType.CHEST || type == TargetType.MISROTATED_DEEPSLATE) {
+                if (type == TargetType.SPAWNER || type == TargetType.CHEST || type == TargetType.MISROTATED_DEEPSLATE || type == TargetType.LOW_Y_STONE_DIRT) {
                     if (!validateBlockType(currentBlock, type)) { toRemove.add(pos); continue; }
                 }
 
@@ -562,6 +620,22 @@ public class DungeonAssistant extends Module {
             targets.remove(pos);
         }
 
+        // Spawner Torches Rendering
+        if (!spawnerTorches.isEmpty() && trackSpawners.get() && highlightSpawnerTorches.get()) {
+            SettingColor torchColor = spawnerTorchColor.get();
+            for (BlockPos pos : spawnerTorches) {
+                if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
+                Box torchBox = createPaddedBox(pos);
+                
+                if (isSpectral) {
+                    event.renderer.box(torchBox, withAlpha(torchColor, spectralBlockFillAlpha.get()), withAlpha(torchColor, 0), ShapeMode.Sides, 0);
+                } else {
+                    renderGlowLayers(event, torchBox, torchColor);
+                    event.renderer.box(torchBox, withAlpha(torchColor, 0), torchColor, ShapeMode.Lines, 0);
+                }
+            }
+        }
+
         if (trackEndermites.get() && !endermiteTargets.isEmpty()) {
             SettingColor color = endermiteColor.get();
             for (EndermiteEntity endermite : endermiteTargets) {
@@ -579,6 +653,19 @@ public class DungeonAssistant extends Module {
                     );
                     renderGlowLayers(event, beamBox, color);
                     event.renderer.box(beamBox, withAlpha(color, 60), color, ShapeMode.Both, 0);
+                }
+            }
+        }
+
+        if (trackXpOrbs.get() && !xpOrbTargets.isEmpty()) {
+            SettingColor color = xpOrbColor.get();
+            for (ExperienceOrbEntity orb : xpOrbTargets) {
+                if (!orb.isAlive()) continue;
+                Box orbBox = orb.getBoundingBox();
+
+                if (!isSpectral) {
+                    renderGlowLayers(event, orbBox, color);
+                    event.renderer.box(orbBox, withAlpha(color, 0), color, ShapeMode.Lines, 0);
                 }
             }
         }
@@ -604,6 +691,12 @@ public class DungeonAssistant extends Module {
         if (trackEndermites.get()) {
             for (EndermiteEntity e : endermiteTargets) {
                 if (e.isAlive()) GlowingRegistry.add(e.getId(), toArgb(endermiteColor.get()));
+            }
+        }
+
+        if (trackXpOrbs.get()) {
+            for (ExperienceOrbEntity orb : xpOrbTargets) {
+                if (orb.isAlive()) GlowingRegistry.add(orb.getId(), toArgb(xpOrbColor.get()));
             }
         }
     }
@@ -871,20 +964,17 @@ public class DungeonAssistant extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void updateScanningLogic() {
-        try { if (mc.world.getRegistryKey() == null) return; }
-        catch (Exception e) { return; }
+        if (mc.world.getRegistryKey() == null) return;
 
         if (dimensionChangeCooldown > 0) { dimensionChangeCooldown--; return; }
 
-        try {
-            String currDim = mc.world.getRegistryKey().getValue().toString();
-            if (!currDim.equals(lastDimension)) {
-                dimensionChangeCooldown = DIMENSION_CHANGE_COOLDOWN_TICKS;
-                lastDimension = currDim;
-                resetScanningState();
-                return;
-            }
-        } catch (Exception ignored) { return; }
+        String currDim = mc.world.getRegistryKey().getValue().toString();
+        if (!currDim.equals(lastDimension)) {
+            dimensionChangeCooldown = DIMENSION_CHANGE_COOLDOWN_TICKS;
+            lastDimension = currDim;
+            resetScanningState();
+            return;
+        }
 
         BlockPos playerPos    = mc.player.getBlockPos();
         int      centerChunkX = playerPos.getX() >> 4;
@@ -895,6 +985,7 @@ public class DungeonAssistant extends Module {
         pruneBlockTargets();
         scanNewChunks(centerChunkX, centerChunkZ);
         scanEndermites();
+        scanXpOrbs();
         scanSpawnerTorches();
         pruneCheckedEntityIds();
         pruneCheckedContainers();
@@ -1053,6 +1144,24 @@ public class DungeonAssistant extends Module {
         notifiedEndermites.retainAll(currentIds);
     }
 
+    private void scanXpOrbs() {
+        xpOrbTargets.clear();
+        if (!trackXpOrbs.get() || mc.world == null || mc.player == null) return;
+
+        boolean isSpectral = renderMode.get() == RenderMode.SPECTRAL;
+        int blockRange = range.get() * 16;
+        Box searchBox = new Box(mc.player.getBlockPos()).expand(blockRange);
+
+        for (ExperienceOrbEntity orb : mc.world.getEntitiesByClass(ExperienceOrbEntity.class, searchBox, e -> true)) {
+            xpOrbTargets.add(orb);
+            if (isSpectral) {
+                GlowingRegistry.add(orb.getId(), toArgb(xpOrbColor.get()));
+            } else {
+                GlowingRegistry.remove(orb.getId());
+            }
+        }
+    }
+
     private void scanSpawnerTorches() {
         spawnerTorches.clear();
         if (!trackSpawners.get() || !highlightSpawnerTorches.get()) return;
@@ -1134,7 +1243,8 @@ public class DungeonAssistant extends Module {
         boolean isOverworld = "minecraft:overworld".equals(lastDimension);
         boolean doCustomBlocks = scanCustomBlocks.get() && !filterBlocks.get().isEmpty() && isOverworld;
         boolean doMisrotated   = trackMisrotatedDeepslate.get() && isOverworld;
-        if (!doCustomBlocks && !doMisrotated) return;
+        boolean doLowY         = trackLowYStoneDirt.get();
+        if (!doCustomBlocks && !doMisrotated && !doLowY) return;
 
         int          minY     = minYSetting.get();
         int          maxY     = maxYSetting.get();
@@ -1165,6 +1275,12 @@ public class DungeonAssistant extends Module {
                                 && state.contains(Properties.AXIS)
                                 && state.get(Properties.AXIS) != Axis.Y) {
                             targets.put(blockPos, TargetType.MISROTATED_DEEPSLATE);
+                        }
+
+                        if (doLowY && worldY < lowYLevel.get()) {
+                            if (block == Blocks.STONE || block == Blocks.DIRT) {
+                                targets.put(blockPos, TargetType.LOW_Y_STONE_DIRT);
+                            }
                         }
                     }
                 }
@@ -1211,8 +1327,7 @@ public class DungeonAssistant extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Pruning — validate block targets still exist in loaded chunks,
-    //           and mark unloaded chunks for re-scanning
+    // Pruning
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void pruneBlockTargets() {
@@ -1223,7 +1338,6 @@ public class DungeonAssistant extends Module {
 
         for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
             TargetType type = entry.getValue();
-            // Chest minecarts are already pruned by scanChestMinecarts()
             if (type == TargetType.CHEST_MINECART) continue;
 
             BlockPos pos = entry.getKey();
@@ -1231,13 +1345,11 @@ public class DungeonAssistant extends Module {
             int chunkZ = pos.getZ() >> 4;
 
             if (mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ)) {
-                // Chunk is loaded — validate the block still matches the expected type
                 Block currentBlock = mc.world.getBlockState(pos).getBlock();
                 if (mc.world.getBlockState(pos).isAir() || !validateBlockType(currentBlock, type)) {
                     toRemove.add(pos);
                 }
             } else {
-                // Chunk is not loaded — mark it so it gets re-scanned when it comes back
                 chunksToRescan.add(new ChunkPos(chunkX, chunkZ));
             }
         }
@@ -1246,7 +1358,6 @@ public class DungeonAssistant extends Module {
             targets.remove(pos);
         }
 
-        // Force re-scan of chunks that unloaded, so we pick up changes when they reload
         if (!chunksToRescan.isEmpty()) {
             scannedChunks.removeAll(chunksToRescan);
         }
@@ -1341,6 +1452,7 @@ public class DungeonAssistant extends Module {
             case CHEST_MINECART       -> true;
             case CUSTOM_BLOCK         -> filterBlocks.get().contains(block);
             case MISROTATED_DEEPSLATE -> block == Blocks.DEEPSLATE;
+            case LOW_Y_STONE_DIRT     -> block == Blocks.STONE || block == Blocks.DIRT;
         };
     }
 
@@ -1351,6 +1463,7 @@ public class DungeonAssistant extends Module {
             case CHEST_MINECART       -> chestMinecartColor.get();
             case CUSTOM_BLOCK         -> customBlockColor.get();
             case MISROTATED_DEEPSLATE -> misrotatedDeepslateColor.get();
+            case LOW_Y_STONE_DIRT     -> lowYStoneDirtColor.get();
         };
     }
 
@@ -1405,8 +1518,13 @@ public class DungeonAssistant extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Public API — only counts targets in loaded chunks with valid blocks
+    // Public API
     // ═══════════════════════════════════════════════════════════════════════════
+
+    // ADDED: Public API to allow the HandledScreenMixin to check if it should render the S/D buttons
+    public boolean shouldShowStealDumpButtons() {
+        return isActive() && stealDumpButtons.get();
+    }
 
     public int getTotalTargets() {
         if (mc.player == null || mc.world == null) return 0;
@@ -1422,10 +1540,8 @@ public class DungeonAssistant extends Module {
             double dz = pos.getZ() + 0.5 - mc.player.getZ();
             if (dx * dx + dz * dz > rangeSq) continue;
 
-            // Only count targets in currently loaded chunks
             if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
 
-            // Validate block types still exist (minecarts are already pruned by scanChestMinecarts)
             if (type != TargetType.CHEST_MINECART) {
                 Block currentBlock = mc.world.getBlockState(pos).getBlock();
                 if (!validateBlockType(currentBlock, type)) continue;
@@ -1456,10 +1572,8 @@ public class DungeonAssistant extends Module {
             double dz = pos.getZ() + 0.5 - mc.player.getZ();
             if (dx * dx + dz * dz > rangeSq) continue;
 
-            // Only count targets in currently loaded chunks
             if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
 
-            // Validate block types still exist (minecarts are already pruned by scanChestMinecarts)
             if (type != TargetType.CHEST_MINECART) {
                 Block currentBlock = mc.world.getBlockState(pos).getBlock();
                 if (!validateBlockType(currentBlock, type)) continue;

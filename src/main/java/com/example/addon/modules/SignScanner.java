@@ -1,6 +1,8 @@
 package com.example.addon.modules;
 
 import java.lang.reflect.Field;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -65,7 +67,7 @@ public class SignScanner extends Module {
     private final SettingGroup sgOptimization = settings.createGroup("Optimization");
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Highlight Style Enum
+    // Enums
     // ═══════════════════════════════════════════════════════════════════════════
 
     public enum HighlightStyle {
@@ -74,6 +76,30 @@ public class SignScanner extends Module {
 
         private final String displayName;
         HighlightStyle(String name) { this.displayName = name; }
+
+        @Override
+        public String toString() { return displayName; }
+    }
+
+    public enum DateFormat {
+        Readable("Readable"),
+        Short("Short");
+
+        private final String displayName;
+        DateFormat(String name) { this.displayName = name; }
+
+        @Override
+        public String toString() { return displayName; }
+    }
+
+    public enum DateLine {
+        Line_1("Line 1"),
+        Line_2("Line 2"),
+        Line_3("Line 3"),
+        Line_4("Line 4");
+
+        private final String displayName;
+        DateLine(String name) { this.displayName = name; }
 
         @Override
         public String toString() { return displayName; }
@@ -102,7 +128,7 @@ public class SignScanner extends Module {
 
     private final Setting<Integer> editorDelay = sgAutoSign.add(new IntSetting.Builder()
         .name("editor-delay").description("Ticks to wait before submitting the sign.")
-        .defaultValue(5).min(1)
+        .defaultValue(8).min(1)
         .visible(autoSign::get).build());
 
     private final Setting<Boolean> autoGlow = sgAutoSign.add(new BoolSetting.Builder()
@@ -122,6 +148,27 @@ public class SignScanner extends Module {
         .name("lines").description("The text to put on the sign (up to 4 lines).")
         .defaultValue("Hello", "World")
         .visible(autoSign::get).build());
+
+    private final Setting<Boolean> autoDate = sgAutoSign.add(new BoolSetting.Builder()
+        .name("auto-date")
+        .description("Automatically stamps the current date onto the sign.")
+        .defaultValue(false)
+        .visible(autoSign::get)
+        .build());
+
+    private final Setting<DateFormat> dateFormat = sgAutoSign.add(new EnumSetting.Builder<DateFormat>()
+        .name("date-format")
+        .description("How the date is formatted.")
+        .defaultValue(DateFormat.Readable)
+        .visible(() -> autoSign.get() && autoDate.get())
+        .build());
+
+    private final Setting<DateLine> dateLine = sgAutoSign.add(new EnumSetting.Builder<DateLine>()
+        .name("date-line")
+        .description("Which line to place the date on.")
+        .defaultValue(DateLine.Line_4)
+        .visible(() -> autoSign.get() && autoDate.get())
+        .build());
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Render
@@ -260,8 +307,8 @@ public class SignScanner extends Module {
     private int timer = 0;
 
     // AutoSign state
-    private int      editTimer     = 0;
-    private BlockPos pendingSignPos = null;   // position of the sign being edited
+    private int         editTimer   = 0;
+    private BlockEntity pendingSign = null;   
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -281,23 +328,16 @@ public class SignScanner extends Module {
         notified.clear();
         timer         = 0;
         editTimer     = 0;
-        pendingSignPos = null;
+        pendingSign = null;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Tick — AutoSign
-    //
-    // Flow:
-    //   1. onOpenScreen fires  → record pendingSignPos from the screen's BlockPos
-    //                            field (always present in every MC version).
-    //   2. Each tick, editTimer increments while pendingSignPos != null.
-    //   3. Once the delay expires, finishEditing() sends the packet, applies
-    //      glow/dye, then closes the screen.
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (!autoSign.get() || pendingSignPos == null) return;
+        if (!autoSign.get() || pendingSign == null) return;
 
         editTimer++;
         if (editTimer >= editorDelay.get()) {
@@ -310,18 +350,13 @@ public class SignScanner extends Module {
         if (!autoSign.get()) return;
 
         if (event.screen instanceof AbstractSignEditScreen screen) {
-            // Extract the BlockPos stored inside the screen. Every concrete
-            // subclass (SignEditScreen, HangingSignEditScreen) inherits from
-            // AbstractSignEditScreen and stores a BlockPos field — we look for
-            // it by type rather than by name to stay obfuscation-safe.
-            BlockPos pos = extractBlockPos(screen);
-            if (pos != null) {
-                pendingSignPos = pos;
-                editTimer      = 0;
+            BlockEntity sign = extractSignEntity(screen);
+            if (sign != null) {
+                pendingSign = sign;
+                editTimer   = 0;
             }
         } else {
-            // Any other screen opened mid-edit cancels the pending operation.
-            pendingSignPos = null;
+            pendingSign = null;
         }
     }
 
@@ -384,48 +419,44 @@ public class SignScanner extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void finishEditing() {
-        if (pendingSignPos == null) return;
+        if (pendingSign == null) return;
 
-        // Verify the block entity still exists and is a sign.
-        BlockEntity be = mc.world.getBlockEntity(pendingSignPos);
-        if (!(be instanceof SignBlockEntity sign)) {
-            // Block entity not yet loaded or no longer a sign — abort cleanly.
-            pendingSignPos = null;
-            return;
-        }
+        BlockPos pos = pendingSign.getPos();
 
-        // Build the four row strings from the configured lines list.
         List<String> configured = lines.get();
         String[] rows = new String[4];
         for (int i = 0; i < 4; i++) {
             rows[i] = (i < configured.size()) ? configured.get(i) : "";
         }
 
-        // Send the update packet. true = front face.
+        // Inject Date if enabled
+        if (autoDate.get()) {
+            int lineIndex = dateLine.get().ordinal(); // 0 to 3
+            rows[lineIndex] = getCurrentDate();
+        }
+
         mc.player.networkHandler.sendPacket(
-            new UpdateSignC2SPacket(pendingSignPos, true, rows[0], rows[1], rows[2], rows[3])
+            new UpdateSignC2SPacket(pos, true, rows[0], rows[1], rows[2], rows[3])
         );
 
-        // Apply glow ink sac if requested.
         if (autoGlow.get()) {
             FindItemResult glowSac = InvUtils.findInHotbar(Items.GLOW_INK_SAC);
             if (glowSac.found()) {
                 InvUtils.swap(glowSac.slot(), false);
                 mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND,
-                    new BlockHitResult(Vec3d.ofCenter(pendingSignPos), Direction.UP, pendingSignPos, false));
+                    new BlockHitResult(Vec3d.ofCenter(pos), Direction.UP, pos, false));
                 mc.player.swingHand(Hand.MAIN_HAND);
                 InvUtils.swapBack();
             }
         }
 
-        // Apply dye if requested.
         if (autoDye.get()) {
             Item dyeItem = DyeItem.byColor(dyeColor.get());
             FindItemResult dyeResult = InvUtils.findInHotbar(dyeItem);
             if (dyeResult.found()) {
                 InvUtils.swap(dyeResult.slot(), false);
                 mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND,
-                    new BlockHitResult(Vec3d.ofCenter(pendingSignPos), Direction.UP, pendingSignPos, false));
+                    new BlockHitResult(Vec3d.ofCenter(pos), Direction.UP, pos, false));
                 mc.player.swingHand(Hand.MAIN_HAND);
                 InvUtils.swapBack();
             } else {
@@ -434,31 +465,46 @@ public class SignScanner extends Module {
             }
         }
 
-        mc.player.closeScreen();
-        pendingSignPos = null;
+        mc.player.closeHandledScreen();
+        pendingSign = null;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Reflection helper — extract BlockPos from AbstractSignEditScreen
-    //
-    // In every MC version, AbstractSignEditScreen stores a BlockPos field (the
-    // position of the sign being edited). We find it by type rather than by
-    // hard-coded name to stay robust across obfuscation / mappings.
-    //
-    // We intentionally do NOT look for SignBlockEntity: in 1.21 the screen only
-    // holds a BlockPos and fetches the entity from the world when needed.
+    // Auto Date Logic
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private static BlockPos extractBlockPos(AbstractSignEditScreen screen) {
-        // Walk the class hierarchy so we catch both the abstract class and
-        // any concrete subclass (SignEditScreen / HangingSignEditScreen).
+    private String getCurrentDate() {
+        LocalDate date = LocalDate.now();
+        if (dateFormat.get() == DateFormat.Short) {
+            return date.format(DateTimeFormatter.ofPattern("dd/MM/yy"));
+        } else {
+            String daySuffix = getDaySuffix(date.getDayOfMonth());
+            return date.format(DateTimeFormatter.ofPattern("d'" + daySuffix + "' MMMM yyyy"));
+        }
+    }
+
+    private String getDaySuffix(int day) {
+        if (day >= 11 && day <= 13) return "th";
+        return switch (day % 10) {
+            case 1 -> "st";
+            case 2 -> "nd";
+            case 3 -> "rd";
+            default -> "th";
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Reflection helper — 1.21+ Safe Entity Extraction
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private static BlockEntity extractSignEntity(AbstractSignEditScreen screen) {
         Class<?> cls = screen.getClass();
         while (cls != null && cls != Object.class) {
             for (Field f : cls.getDeclaredFields()) {
-                if (f.getType() == BlockPos.class) {
+                if (SignBlockEntity.class.isAssignableFrom(f.getType()) || HangingSignBlockEntity.class.isAssignableFrom(f.getType())) {
                     try {
                         f.setAccessible(true);
-                        return (BlockPos) f.get(screen);
+                        return (BlockEntity) f.get(screen);
                     } catch (Exception ignored) {}
                 }
             }
@@ -468,14 +514,13 @@ public class SignScanner extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Sign Text Helpers
+    // Sign Text Helpers — Fixed for 1.21+ Text Color API
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void readSignText(SignText signText, List<Text> output) {
-        int color = signText.getColor().getSignColor();
         for (Text t : signText.getMessages(false)) {
             Text cleaned = cleanSignText(t);
-            if (!cleaned.getString().trim().isEmpty()) output.add(applyColor(cleaned, color));
+            if (!cleaned.getString().trim().isEmpty()) output.add(cleaned);
         }
     }
 
@@ -504,7 +549,6 @@ public class SignScanner extends Module {
             catch (Exception ignored) {}
         }
         if (redactCoordinates.get()) {
-            // Matches patterns like "100000 64 -20000" or "X: 100k Z: 200k"
             working = working.replaceAll("-?\\d+[kKmM]?([\\s,]+-?\\d+[kKmM]?){1,2}", "XXXX");
         }
         return working;
@@ -512,11 +556,6 @@ public class SignScanner extends Module {
 
     private Text cleanSignText(Text text) {
         return Text.literal(text.getString().replaceAll("§.", "")).setStyle(text.getStyle());
-    }
-
-    private Text applyColor(Text text, int color) {
-        if (text instanceof MutableText mt) return mt.setStyle(text.getStyle().withColor(color));
-        return text;
     }
 
     private String getTextContent(Text text) { return text.getString(); }
@@ -661,11 +700,6 @@ public class SignScanner extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Spectral Highlight
-    //
-    // Draws a crisp rectangular border around the panel by rendering four thin
-    // quads (top, bottom, left, right) rather than a filled rect, giving the
-    // same sharp-edge look as the vanilla spectral arrow / glowing outline.
-    // An optional pulsating alpha and faint fill are also supported.
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void renderSpectralHighlight(double bx, double by, double bw, double bh) {
@@ -688,17 +722,15 @@ public class SignScanner extends Module {
 
         Renderer2D.COLOR.begin();
 
-        // Optional faint tinted fill
         if (fillAlpha > 0) {
             Renderer2D.COLOR.quad(ox, oy, ow, oh, withAlpha(sc, fillAlpha));
         }
 
-        // Four border quads: top, bottom, left, right
         SettingColor lc = withAlpha(sc, lineAlpha);
-        Renderer2D.COLOR.quad(ox,                oy,                 ow,        thickness, lc); // top
-        Renderer2D.COLOR.quad(ox,                oy + oh - thickness, ow,        thickness, lc); // bottom
-        Renderer2D.COLOR.quad(ox,                oy + thickness,      thickness, oh - thickness * 2, lc); // left
-        Renderer2D.COLOR.quad(ox + ow - thickness, oy + thickness,    thickness, oh - thickness * 2, lc); // right
+        Renderer2D.COLOR.quad(ox,                oy,                 ow,        thickness, lc); 
+        Renderer2D.COLOR.quad(ox,                oy + oh - thickness, ow,        thickness, lc); 
+        Renderer2D.COLOR.quad(ox,                oy + thickness,      thickness, oh - thickness * 2, lc); 
+        Renderer2D.COLOR.quad(ox + ow - thickness, oy + thickness,    thickness, oh - thickness * 2, lc); 
 
         Renderer2D.COLOR.render(null);
     }

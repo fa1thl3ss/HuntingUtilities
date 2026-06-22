@@ -5,18 +5,21 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
-import java.util.Queue;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 import com.example.addon.HuntingUtilities;
+import com.example.addon.utils.GlowingRegistry;
 
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
@@ -38,9 +41,14 @@ import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.TrapdoorBlock;
+import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.VertexConsumerProvider;
+import net.minecraft.client.render.block.entity.BeaconBlockEntityRenderer;
 import net.minecraft.client.sound.PositionedSoundInstance;
+import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.projectile.thrown.EnderPearlEntity;
@@ -63,9 +71,9 @@ import net.minecraft.world.chunk.WorldChunk;
 
 public class PearlPulse extends Module {
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Enums
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     public enum PingSound {
         BeaconActivate   ("Beacon Activate",    SoundEvents.BLOCK_BEACON_ACTIVATE),
@@ -89,16 +97,9 @@ public class PearlPulse extends Module {
     }
 
     public enum ModuleMode { Assistant, Requester }
-
     public enum PullOrder { DISCOVERY, NEAREST }
+    public enum RenderMode { Default, PearlsOnly }
 
-    /**
-     * Controls how coordinates are displayed in player-facing chat messages.
-     *
-     * VISIBLE  – coordinates are shown as-is (e.g. "123, 64, -456").
-     * CENSORED – coordinates are replaced with "XXXX" to prevent leaking.
-     * HIDDEN   – the entire position clause is stripped from the message.
-     */
     public enum CoordVisibility {
         VISIBLE  ("Visible"),
         CENSORED ("Censored"),
@@ -109,35 +110,17 @@ public class PearlPulse extends Module {
         @Override public String toString() { return label; }
     }
 
-    /**
-     * IDLE         – standing by.
-     * WALKING_TO   – moving toward a waypoint en-route to the trapdoor.
-     * PULLING      – within reach; fire interaction this tick.
-     * WALKING_BACK – returning to the saved idle position.
-     * ABORTED      – safety failure; keys released, waiting for next trigger.
-     */
     private enum WalkState { IDLE, WALKING_TO, PULLING, WALKING_BACK, ABORTED }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Coordinate redaction helpers
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // Constants & Helpers
+    // ═══════════════════════════════════════════════════════════════
 
-    /**
-     * Matches "@ X, Y, Z" position clauses appended to discovery/interaction messages.
-     * Examples matched:
-     *   "@ 123, 64, -456"
-     *   "@ -1024, 120, 2048"
-     */
-    private static final Pattern COORD_CLAUSE =
-        Pattern.compile("\\s*@\\s*-?\\d+,\\s*-?\\d+,\\s*-?\\d+");
+    private static final Identifier BEAM_TEXTURE = Identifier.of("minecraft", "textures/entity/beacon_beam.png");
+    private static final Pattern COORD_CLAUSE = Pattern.compile("\\s*@\\s*-?\\d+,\\s*-?\\d+,\\s*-?\\d+");
+    
+    private static final Map<Integer, Vec3d> BEAM_POS_CACHE = new ConcurrentHashMap<>();
 
-    /**
-     * Formats a BlockPos according to the current CoordVisibility setting.
-     *
-     * VISIBLE  → "X, Y, Z"  (same as BlockPos.toShortString())
-     * CENSORED → "XXXX"
-     * HIDDEN   → null        (caller should omit the "@ ..." clause entirely)
-     */
     private String formatPos(BlockPos pos) {
         if (pos == null) return null;
         return switch (coordVisibility.get()) {
@@ -147,133 +130,130 @@ public class PearlPulse extends Module {
         };
     }
 
-    /**
-     * Appends " @ <pos>" to a base message, respecting the current CoordVisibility.
-     * If visibility is HIDDEN the base message is returned unchanged.
-     */
     private String withPos(String base, BlockPos pos) {
         String formatted = formatPos(pos);
-        if (formatted == null) return base;           // HIDDEN — drop the clause
+        if (formatted == null) return base;
         return base + " @ " + formatted;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Setting Groups
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
-    private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgColumns = settings.createGroup("Bubble Columns");
-    private final SettingGroup sgCap     = settings.createGroup("Cap Box");
-    private final SettingGroup sgSound   = settings.createGroup("Sound");
-    private final SettingGroup sgBot     = settings.createGroup("Bot Assistant");
-    private final SettingGroup sgWalker  = settings.createGroup("Walker");
-    private final SettingGroup sgPrivacy = settings.createGroup("Privacy");
+    private final SettingGroup sgGeneral    = settings.getDefaultGroup();
+    private final SettingGroup sgColumns    = settings.createGroup("Bubble Columns");
+    private final SettingGroup sgCap        = settings.createGroup("Cap Box");
+    private final SettingGroup sgSound      = settings.createGroup("Sound");
+    private final SettingGroup sgBot        = settings.createGroup("Bot Assistant");
+    private final SettingGroup sgWalker     = settings.createGroup("Walker");
+    private final SettingGroup sgPrivacy    = settings.createGroup("Privacy");
+    private final SettingGroup sgPearlsOnly = settings.createGroup("Pearls Only");
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════
     // Settings — General
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════
 
     private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
         .name("range").description("Detection radius in blocks.")
         .defaultValue(64).min(16).sliderMax(128).build());
 
     private final Setting<Integer> scanInterval = sgGeneral.add(new IntSetting.Builder()
-        .name("scan-interval")
-        .description("Ticks between bubble column background scans. Higher = less CPU.")
+        .name("scan-interval").description("Ticks between bubble column background scans.")
         .defaultValue(40).min(10).sliderMax(200).build());
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Privacy
-    // ═══════════════════════════════════════════════════════════════════════════
+    private final Setting<RenderMode> renderMode = sgGeneral.add(new EnumSetting.Builder<RenderMode>()
+        .name("render-mode").description("Default = bubble column beams. Pearls Only = entity outlines & soul sand beams.")
+        .defaultValue(RenderMode.Default).build());
 
-    private final Setting<CoordVisibility> coordVisibility = sgPrivacy.add(
-        new EnumSetting.Builder<CoordVisibility>()
-            .name("coord-visibility")
-            .description(
-                "Controls how coordinates appear in chat messages. " +
-                "VISIBLE = show real coords; CENSORED = replace with XXXX; " +
-                "HIDDEN = remove the position clause entirely.")
-            .defaultValue(CoordVisibility.VISIBLE)
-            .build());
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Bubble Columns
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private final Setting<Boolean> columnsEnabled = sgColumns.add(new BoolSetting.Builder()
-        .name("highlight-columns").description("Draw a glowing beam up through each bubble column.")
+    private final Setting<Boolean> highlightOwnPearl = sgGeneral.add(new BoolSetting.Builder()
+        .name("highlight-own-pearl").description("Use a distinct color for your own pearls.")
         .defaultValue(true).build());
 
+    private final Setting<SettingColor> ownPearlColor = sgGeneral.add(new ColorSetting.Builder()
+        .name("own-pearl-color").description("Color for your own pearl's outline in Default mode.")
+        .defaultValue(new SettingColor(0, 255, 0, 255))
+        .visible(() -> renderMode.get() == RenderMode.Default && highlightOwnPearl.get()).build());
+
+    // ═══════════════════════════════════════════════════════════════
+    // Settings — Privacy
+    // ═══════════════════════════════════════════════════════════════
+
+    private final Setting<CoordVisibility> coordVisibility = sgPrivacy.add(
+        new EnumSetting.Builder<CoordVisibility>().name("coord-visibility")
+            .description("Controls how coordinates appear in chat messages.")
+            .defaultValue(CoordVisibility.VISIBLE).build());
+
+    // ═══════════════════════════════════════════════════════════════
+    // Settings — Bubble Columns (Hidden if PearlsOnly)
+    // ═══════════════════════════════════════════════════════════════
+
+    private final Setting<Boolean> columnsEnabled = sgColumns.add(new BoolSetting.Builder()
+        .name("highlight-columns").defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.Default).build());
+
     private final Setting<SettingColor> coreColor = sgColumns.add(new ColorSetting.Builder()
-        .name("core-color").description("Color of the bright inner beam.")
-        .defaultValue(new SettingColor(180, 230, 255, 255)).visible(columnsEnabled::get).build());
+        .name("core-color").defaultValue(new SettingColor(180, 230, 255, 255))
+        .visible(() -> renderMode.get() == RenderMode.Default && columnsEnabled.get()).build());
 
     private final Setting<SettingColor> glowColor = sgColumns.add(new ColorSetting.Builder()
-        .name("glow-color").description("Color of the soft outer bloom. Keep alpha low (30-80).")
-        .defaultValue(new SettingColor(0, 180, 255, 50)).visible(columnsEnabled::get).build());
+        .name("glow-color").defaultValue(new SettingColor(0, 180, 255, 50))
+        .visible(() -> renderMode.get() == RenderMode.Default && columnsEnabled.get()).build());
 
     private final Setting<Double> coreWidth = sgColumns.add(new DoubleSetting.Builder()
-        .name("core-width").description("Half-width of the solid inner beam box in blocks.")
-        .defaultValue(0.03).min(0.005).sliderMax(0.25).visible(columnsEnabled::get).build());
+        .name("core-width").defaultValue(0.03).min(0.005).sliderMax(0.25)
+        .visible(() -> renderMode.get() == RenderMode.Default && columnsEnabled.get()).build());
 
     private final Setting<Double> glowSpread = sgColumns.add(new DoubleSetting.Builder()
-        .name("glow-spread").description("How far each bloom layer expands outward (blocks).")
-        .defaultValue(0.08).min(0.01).sliderMax(0.5).visible(columnsEnabled::get).build());
+        .name("glow-spread").defaultValue(0.08).min(0.01).sliderMax(0.5)
+        .visible(() -> renderMode.get() == RenderMode.Default && columnsEnabled.get()).build());
 
     private final Setting<Integer> glowLayers = sgColumns.add(new IntSetting.Builder()
-        .name("glow-layers").description("Number of bloom expansion layers.")
-        .defaultValue(4).min(1).sliderMax(8).visible(columnsEnabled::get).build());
+        .name("glow-layers").defaultValue(4).min(1).sliderMax(8)
+        .visible(() -> renderMode.get() == RenderMode.Default && columnsEnabled.get()).build());
 
     private final Setting<Integer> glowBaseAlpha = sgColumns.add(new IntSetting.Builder()
-        .name("glow-base-alpha").description("Alpha of the innermost glow layer (0-255).")
-        .defaultValue(50).min(4).sliderMax(150).visible(columnsEnabled::get).build());
+        .name("glow-base-alpha").defaultValue(50).min(4).sliderMax(150)
+        .visible(() -> renderMode.get() == RenderMode.Default && columnsEnabled.get()).build());
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Cap Box
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // Settings — Cap Box (Hidden if PearlsOnly)
+    // ═══════════════════════════════════════════════════════════════
 
     public enum CapPosition { NONE, BOTTOM, TOP, BOTH }
 
     private final Setting<CapPosition> capPosition = sgCap.add(new EnumSetting.Builder<CapPosition>()
-        .name("cap-position")
-        .description("Where to draw the flat marker box: bottom, top (pearl), both, or none.")
-        .defaultValue(CapPosition.BOTTOM).build());
+        .name("cap-position").defaultValue(CapPosition.BOTTOM)
+        .visible(() -> renderMode.get() == RenderMode.Default).build());
 
     private final Setting<SettingColor> capColor = sgCap.add(new ColorSetting.Builder()
-        .name("cap-color").description("Fill and outline color of the flat cap box.")
-        .defaultValue(new SettingColor(0, 200, 255, 160))
-        .visible(() -> capPosition.get() != CapPosition.NONE).build());
+        .name("cap-color").defaultValue(new SettingColor(0, 200, 255, 160))
+        .visible(() -> renderMode.get() == RenderMode.Default && capPosition.get() != CapPosition.NONE).build());
 
     private final Setting<Double> capSize = sgCap.add(new DoubleSetting.Builder()
-        .name("cap-size").description("Half-width of the cap box on X/Z axes (blocks).")
-        .defaultValue(0.4).min(0.05).sliderMax(2.0)
-        .visible(() -> capPosition.get() != CapPosition.NONE).build());
+        .name("cap-size").defaultValue(0.4).min(0.05).sliderMax(2.0)
+        .visible(() -> renderMode.get() == RenderMode.Default && capPosition.get() != CapPosition.NONE).build());
 
     private final Setting<Double> capThickness = sgCap.add(new DoubleSetting.Builder()
-        .name("cap-thickness").description("Height of the flat cap box (blocks).")
-        .defaultValue(0.04).min(0.01).sliderMax(0.5)
-        .visible(() -> capPosition.get() != CapPosition.NONE).build());
+        .name("cap-thickness").defaultValue(0.04).min(0.01).sliderMax(0.5)
+        .visible(() -> renderMode.get() == RenderMode.Default && capPosition.get() != CapPosition.NONE).build());
 
     private final Setting<ShapeMode> capShapeMode = sgCap.add(new EnumSetting.Builder<ShapeMode>()
-        .name("cap-shape-mode").description("Render the cap as fill, outline, or both.")
-        .defaultValue(ShapeMode.Both)
-        .visible(() -> capPosition.get() != CapPosition.NONE).build());
+        .name("cap-shape-mode").defaultValue(ShapeMode.Both)
+        .visible(() -> renderMode.get() == RenderMode.Default && capPosition.get() != CapPosition.NONE).build());
 
     private final Setting<Boolean> capGlow = sgCap.add(new BoolSetting.Builder()
-        .name("cap-glow").description("Add bloom expansion layers to the cap box.")
-        .defaultValue(true).visible(() -> capPosition.get() != CapPosition.NONE).build());
+        .name("cap-glow").defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.Default && capPosition.get() != CapPosition.NONE).build());
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Settings — Sound
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     private final Setting<Boolean> soundEnabled = sgSound.add(new BoolSetting.Builder()
-        .name("sound-ping").description("Play a sound when a new stasis pearl is discovered.")
-        .defaultValue(true).build());
+        .name("sound-ping").defaultValue(true).build());
 
     private final Setting<PingSound> pingSound = sgSound.add(new EnumSetting.Builder<PingSound>()
-        .name("sound").description("Sound to play on new pearl detection.")
-        .defaultValue(PingSound.BeaconActivate).visible(soundEnabled::get).build());
+        .name("sound").defaultValue(PingSound.BeaconActivate).visible(soundEnabled::get).build());
 
     private final Setting<Double> soundVolume = sgSound.add(new DoubleSetting.Builder()
         .name("volume").defaultValue(1.0).min(0.1).sliderMax(2.0).visible(soundEnabled::get).build());
@@ -281,186 +261,203 @@ public class PearlPulse extends Module {
     private final Setting<Double> soundPitch = sgSound.add(new DoubleSetting.Builder()
         .name("pitch").defaultValue(1.8).min(0.5).sliderMax(2.0).visible(soundEnabled::get).build());
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Settings — Bot Assistant
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     private final Setting<ModuleMode> moduleMode = sgBot.add(new EnumSetting.Builder<ModuleMode>()
-        .name("mode")
-        .description("Assistant = acts as the bot; Requester = acts as a regular player with a trigger hotkey.")
-        .defaultValue(ModuleMode.Requester)
-        .build());
+        .name("mode").defaultValue(ModuleMode.Requester).build());
 
     private final Setting<String> botUsername = sgBot.add(new StringSetting.Builder()
-        .name("bot-username")
-        .description("Bot's username. Assistant uses this to detect mentions; Requester uses it as the whisper target.")
-        .defaultValue("").build());
+        .name("bot-username").defaultValue("").build());
 
     private final Setting<String> triggerPhrase = sgBot.add(new StringSetting.Builder()
-        .name("trigger-phrase")
-        .description("Comma-separated keywords — any one triggers a pull. Default: tp,pull,pearl.")
-        .defaultValue("tp,pull,pearl").build());
+        .name("trigger-phrase").defaultValue("tp,pull,pearl").build());
 
     private final Setting<List<String>> whitelist = sgBot.add(new StringListSetting.Builder()
-        .name("whitelist")
-        .description("Exact usernames allowed to trigger the bot.")
-        .defaultValue(Collections.emptyList())
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant)
-        .build());
+        .name("whitelist").defaultValue(Collections.emptyList())
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant).build());
 
     private final Setting<Keybind> selfTriggerKey = sgBot.add(new KeybindSetting.Builder()
-        .name("self-trigger-key")
-        .description("Sends a whisper to the bot with a random suffix to bypass spam filters.")
-        .defaultValue(Keybind.none())
-        .visible(() -> moduleMode.get() == ModuleMode.Requester)
-        .build()
-    );
+        .name("self-trigger-key").defaultValue(Keybind.none())
+        .visible(() -> moduleMode.get() == ModuleMode.Requester).build());
 
     private final Setting<Integer> pullCooldown = sgBot.add(new IntSetting.Builder()
-        .name("cooldown").description("Minimum seconds between triggers.")
-        .defaultValue(5).min(1).sliderMax(30).build());
+        .name("cooldown").defaultValue(5).min(1).sliderMax(30).build());
 
     private final Setting<PullOrder> pullOrder = sgBot.add(new EnumSetting.Builder<PullOrder>()
-        .name("pull-order")
-        .description("DISCOVERY = pull in order first seen; NEAREST = nearest first.")
-        .defaultValue(PullOrder.DISCOVERY)
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant)
-        .build());
+        .name("pull-order").defaultValue(PullOrder.DISCOVERY)
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant).build());
 
     private final Setting<Boolean> notifyEnabled = sgBot.add(new BoolSetting.Builder()
-        .name("notify-requester")
-        .description("Send a /msg to the triggering player before the pull.")
-        .defaultValue(true)
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant)
-        .build());
+        .name("notify-requester").defaultValue(true)
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant).build());
 
     private final Setting<String> notifyMessage = sgBot.add(new StringSetting.Builder()
-        .name("notify-message").description("Message sent. Use {player} for requester name.")
-        .defaultValue("Pulling your pearl now, {player}.")
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant && notifyEnabled.get())
-        .build());
+        .name("notify-message").defaultValue("Pulling your pearl now, {player}.")
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant && notifyEnabled.get()).build());
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Settings — Walker
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     private final Setting<Boolean> walkerEnabled = sgWalker.add(new BoolSetting.Builder()
-        .name("walker-enabled").description("Walk to the trapdoor when out of reach, then return.")
-        .defaultValue(true)
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant)
-        .build());
+        .name("walker-enabled").defaultValue(true)
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant).build());
 
     private final Setting<Double> interactReach = sgWalker.add(new DoubleSetting.Builder()
-        .name("interact-reach").description("Distance (blocks) at which the walker stops and interacts.")
-        .defaultValue(3.5).min(1.0).sliderMax(5.0)
+        .name("interact-reach").defaultValue(3.5).min(1.0).sliderMax(5.0)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Double> slowZoneRadius = sgWalker.add(new DoubleSetting.Builder()
-        .name("slow-zone-radius")
-        .description("Within this distance of the target, sprint is released to prevent overshooting.")
-        .defaultValue(6.0).min(2.0).sliderMax(16.0)
+        .name("slow-zone-radius").defaultValue(6.0).min(2.0).sliderMax(16.0)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Double> waypointSpacing = sgWalker.add(new DoubleSetting.Builder()
-        .name("waypoint-spacing")
-        .description("Max blocks between intermediate waypoints. Smaller = more course corrections.")
-        .defaultValue(6.0).min(2.0).sliderMax(20.0)
+        .name("waypoint-spacing").defaultValue(6.0).min(2.0).sliderMax(20.0)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Integer> walkTimeoutTicks = sgWalker.add(new IntSetting.Builder()
-        .name("walk-timeout").description("Ticks allowed to reach target before aborting (20 = 1s).")
-        .defaultValue(200).min(40).sliderMax(600)
+        .name("walk-timeout").defaultValue(200).min(40).sliderMax(600)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Integer> returnTimeoutTicks = sgWalker.add(new IntSetting.Builder()
-        .name("return-timeout").description("Ticks allowed to return before giving up.")
-        .defaultValue(200).min(40).sliderMax(600)
+        .name("return-timeout").defaultValue(200).min(40).sliderMax(600)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Double> returnTolerance = sgWalker.add(new DoubleSetting.Builder()
-        .name("return-tolerance").description("Distance (blocks) that counts as 'returned'.")
-        .defaultValue(1.0).min(0.3).sliderMax(5.0)
+        .name("return-tolerance").defaultValue(1.0).min(0.3).sliderMax(5.0)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Integer> stuckThresholdTicks = sgWalker.add(new IntSetting.Builder()
-        .name("stuck-threshold").description("Ticks of no XZ movement before aborting.")
-        .defaultValue(30).min(10).sliderMax(100)
+        .name("stuck-threshold").defaultValue(30).min(10).sliderMax(100)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Double> stuckMovementMin = sgWalker.add(new DoubleSetting.Builder()
-        .name("stuck-min-movement").description("Minimum XZ movement per tick to not be stuck.")
-        .defaultValue(0.02).min(0.005).sliderMax(0.2)
+        .name("stuck-min-movement").defaultValue(0.02).min(0.005).sliderMax(0.2)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Double> voidAbortY = sgWalker.add(new DoubleSetting.Builder()
-        .name("void-abort-y").description("Abort if player Y drops below this value.")
-        .defaultValue(0.0).min(-64.0).sliderMax(64.0)
+        .name("void-abort-y").defaultValue(0.0).min(-64.0).sliderMax(64.0)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Boolean> returnAfterPull = sgWalker.add(new BoolSetting.Builder()
-        .name("return-after-pull").description("Return to idle position after pulling.")
-        .defaultValue(true)
+        .name("return-after-pull").defaultValue(true)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Boolean> walkerSprint = sgWalker.add(new BoolSetting.Builder()
-        .name("sprint").description("Sprint while walking (released in slow zone).")
-        .defaultValue(true)
+        .name("sprint").defaultValue(true)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Boolean> walkerJump = sgWalker.add(new BoolSetting.Builder()
-        .name("auto-jump").description("Jump when stuck to hop over 1-block obstacles.")
-        .defaultValue(true)
+        .name("auto-jump").defaultValue(true)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Integer> jumpAttemptTicks = sgWalker.add(new IntSetting.Builder()
-        .name("jump-attempt-ticks")
-        .description("Stuck ticks before a jump is attempted. Must be < stuck-threshold.")
-        .defaultValue(8).min(2).sliderMax(30)
+        .name("jump-attempt-ticks").defaultValue(8).min(2).sliderMax(30)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get() && walkerJump.get()).build());
 
     private final Setting<Integer> jumpCooldownTicks = sgWalker.add(new IntSetting.Builder()
-        .name("jump-cooldown").description("Ticks to wait between auto-jump attempts.")
-        .defaultValue(12).min(4).sliderMax(40)
+        .name("jump-cooldown").defaultValue(12).min(4).sliderMax(40)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get() && walkerJump.get()).build());
 
     private final Setting<Boolean> sneakOnInteract = sgWalker.add(new BoolSetting.Builder()
-        .name("sneak-on-interact").description("Sneak while clicking the trapdoor to avoid falling in.")
-        .defaultValue(true)
+        .name("sneak-on-interact").defaultValue(true)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
     private final Setting<Boolean> abortOnLowHealth = sgWalker.add(new BoolSetting.Builder()
-        .name("abort-on-low-health")
-        .description("Abort walk if health drops below a certain threshold.")
-        .defaultValue(true)
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant)
-        .build());
+        .name("abort-on-low-health").defaultValue(true)
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant).build());
 
     private final Setting<Integer> lowHealthThreshold = sgWalker.add(new IntSetting.Builder()
-        .name("low-health-threshold")
-        .description("Health (hearts) below which the walker aborts.")
-        .defaultValue(4).min(1).sliderMax(10)
-        .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get() && abortOnLowHealth.get())
-        .build());
+        .name("low-health-threshold").defaultValue(4).min(1).sliderMax(10)
+        .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get() && abortOnLowHealth.get()).build());
 
     private final Setting<Boolean> abortOnFire = sgWalker.add(new BoolSetting.Builder()
-        .name("abort-on-fire").description("Abort walk if player catches fire.")
-        .defaultValue(false)
+        .name("abort-on-fire").defaultValue(false)
         .visible(() -> moduleMode.get() == ModuleMode.Assistant && walkerEnabled.get()).build());
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Pearl memory record
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // Settings — Pearls Only (Hidden if Default)
+    // ═══════════════════════════════════════════════════════════════
 
-    /** Stores everything known about a detected stasis pearl. */
+    private final Setting<Boolean> poOutlineEnabled = sgPearlsOnly.add(new BoolSetting.Builder()
+        .name("outline").description("Renders an outline around the pearl entity.")
+        .defaultValue(true).visible(() -> renderMode.get() == RenderMode.PearlsOnly).build());
+
+    private final Setting<SettingColor> poOutlineColor = sgPearlsOnly.add(new ColorSetting.Builder()
+        .name("outline-color").defaultValue(new SettingColor(0, 200, 255, 255))
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOutlineEnabled.get()).build());
+
+    private final Setting<Integer> poGlowStrength = sgPearlsOnly.add(new IntSetting.Builder()
+        .name("glow-strength").description("Brightens the outline color channels (1-8).")
+        .defaultValue(3).min(1).max(8).sliderMax(8)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOutlineEnabled.get()).build());
+
+    private final Setting<Boolean> poOwnOutlineEnabled = sgPearlsOnly.add(new BoolSetting.Builder()
+        .name("own-outline").description("Renders an outline around your own pearl.")
+        .defaultValue(true).visible(() -> renderMode.get() == RenderMode.PearlsOnly && highlightOwnPearl.get()).build());
+
+    private final Setting<SettingColor> poOwnOutlineColor = sgPearlsOnly.add(new ColorSetting.Builder()
+        .name("own-outline-color").defaultValue(new SettingColor(255, 255, 0, 255))
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOwnOutlineEnabled.get()).build());
+
+    private final Setting<Integer> poOwnGlowStrength = sgPearlsOnly.add(new IntSetting.Builder()
+        .name("own-glow-strength").defaultValue(3).min(1).max(8).sliderMax(8)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOwnOutlineEnabled.get()).build());
+
+    private final Setting<Boolean> poBeamEnabled = sgPearlsOnly.add(new BoolSetting.Builder()
+        .name("beam").description("Renders a beacon beam down to the soul sand.")
+        .defaultValue(true).visible(() -> renderMode.get() == RenderMode.PearlsOnly).build());
+
+    private final Setting<SettingColor> poBeamColor = sgPearlsOnly.add(new ColorSetting.Builder()
+        .name("beam-color").defaultValue(new SettingColor(255, 140, 0, 200))
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poBeamEnabled.get()).build());
+
+    private final Setting<Double> poBeamInnerRadius = sgPearlsOnly.add(new DoubleSetting.Builder()
+        .name("beam-inner-radius").defaultValue(0.1).min(0.01).sliderMax(1.0)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poBeamEnabled.get()).build());
+
+    private final Setting<Double> poBeamOuterRadius = sgPearlsOnly.add(new DoubleSetting.Builder()
+        .name("beam-glow-radius").defaultValue(0.175).min(0.01).sliderMax(2.0)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poBeamEnabled.get()).build());
+
+    private final Setting<Integer> poBeamHeight = sgPearlsOnly.add(new IntSetting.Builder()
+        .name("beam-height").description("How high up the beacon beam shoots.")
+        .defaultValue(64).min(1).max(319).sliderMax(319)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poBeamEnabled.get()).build());
+
+    private final Setting<Boolean> poOwnBeamEnabled = sgPearlsOnly.add(new BoolSetting.Builder()
+        .name("own-beam").description("Renders a beacon beam for your own pearl.")
+        .defaultValue(true).visible(() -> renderMode.get() == RenderMode.PearlsOnly && highlightOwnPearl.get()).build());
+
+    private final Setting<SettingColor> poOwnBeamColor = sgPearlsOnly.add(new ColorSetting.Builder()
+        .name("own-beam-color").defaultValue(new SettingColor(0, 255, 0, 200))
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOwnBeamEnabled.get()).build());
+
+    private final Setting<Double> poOwnBeamInnerRadius = sgPearlsOnly.add(new DoubleSetting.Builder()
+        .name("own-beam-inner-radius").defaultValue(0.1).min(0.01).sliderMax(1.0)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOwnBeamEnabled.get()).build());
+
+    private final Setting<Double> poOwnBeamOuterRadius = sgPearlsOnly.add(new DoubleSetting.Builder()
+        .name("own-beam-glow-radius").defaultValue(0.175).min(0.01).sliderMax(2.0)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOwnBeamEnabled.get()).build());
+
+    private final Setting<Integer> poOwnBeamHeight = sgPearlsOnly.add(new IntSetting.Builder()
+        .name("own-beam-height").defaultValue(64).min(1).max(319).sliderMax(319)
+        .visible(() -> renderMode.get() == RenderMode.PearlsOnly && poOwnBeamEnabled.get()).build());
+
+    // ═══════════════════════════════════════════════════════════════
+    // Pearl memory record
+    // ═══════════════════════════════════════════════════════════════
+
     private record PearlRecord(int entityId, String owner, BlockPos trapdoor, long discoveredMs) {}
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // State
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
-    private final AtomicReference<Map<String, Vec3d[]>> columnLines =
-        new AtomicReference<>(Collections.emptyMap());
-
+    private final AtomicReference<Map<String, Vec3d[]>> columnLines = new AtomicReference<>(Collections.emptyMap());
     private final LinkedHashMap<Integer, PearlRecord> pearlMemory = new LinkedHashMap<>();
     private final Set<Integer> seenPearlIds = Collections.synchronizedSet(new HashSet<>());
 
@@ -473,8 +470,6 @@ public class PearlPulse extends Module {
     private boolean wasSelfTriggerPressed = false;
     private int tickCounter = 0;
 
-    // ── Walker state ──────────────────────────────────────────────────────────
-
     private WalkState          walkState    = WalkState.IDLE;
     private BlockPos           walkTarget   = null;
     private Vec3d              idlePosition = null;
@@ -483,26 +478,26 @@ public class PearlPulse extends Module {
     private Vec3d              lastPos      = null;
     private int                stuckTicks   = 0;
     private int                jumpCooldown = 0;
+    
+    private final Set<Integer> trackedGlowIds = Collections.synchronizedSet(new HashSet<>());
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Constructor
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     public PearlPulse() {
-        super(HuntingUtilities.CATEGORY, "PearlPulse",
-            "Detects nearby stasis pearls sitting above bubble columns.");
+        super(HuntingUtilities.CATEGORY, "PearlPulse", "Detects nearby stasis pearls sitting above bubble columns.");
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Public accessors
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     public int getRange() { return range.get(); }
     public Set<Integer> getSeenPearlIds() { return seenPearlIds; }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════
     // Lifecycle
-    // ═══════════════════════════════════════════════════════════════════════════
 
     @Override
     public void onActivate() {
@@ -517,6 +512,10 @@ public class PearlPulse extends Module {
         tickCounter = 0;
         resetWalker();
         wasSelfTriggerPressed = false;
+        
+        for (int id : trackedGlowIds) GlowingRegistry.remove(id);
+        trackedGlowIds.clear();
+        BEAM_POS_CACHE.clear();
     }
 
     @Override
@@ -529,11 +528,15 @@ public class PearlPulse extends Module {
         scanPending.set(false);
         stopMovement();
         resetWalker();
+        
+        for (int id : trackedGlowIds) GlowingRegistry.remove(id);
+        trackedGlowIds.clear();
+        BEAM_POS_CACHE.clear();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Chat listener — handles public chat + two whisper formats
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // Chat listener
+    // ═══════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onReceiveMessage(ReceiveMessageEvent event) {
@@ -576,13 +579,15 @@ public class PearlPulse extends Module {
 
     private void evaluateTrigger(String senderName, String content, boolean isWhisper) {
         if (mc.player == null) return;
-
         String bot = botUsername.get().trim();
         if (bot.isEmpty()) return;
 
         boolean whitelisted = false;
         for (String name : whitelist.get()) {
-            if (name.equals(senderName)) { whitelisted = true; break; }
+            if (name.equals(senderName)) {
+                whitelisted = true;
+                break;
+            }
         }
         if (!whitelisted) return;
 
@@ -591,7 +596,10 @@ public class PearlPulse extends Module {
         boolean keywordMatched = false;
         for (String kw : phraseRaw.split(",")) {
             String k = kw.trim();
-            if (!k.isEmpty() && content.contains(k)) { keywordMatched = true; break; }
+            if (!k.isEmpty() && content.contains(k)) {
+                keywordMatched = true;
+                break;
+            }
         }
         if (!keywordMatched) return;
 
@@ -614,19 +622,17 @@ public class PearlPulse extends Module {
         mc.player.sendMessage(Text.literal("[PearlPulse] Pull triggered by " + senderName + "."), false);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Tick
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
         if (mc.world.getRegistryKey() == World.NETHER) return;
 
-        // Handle self-trigger keybind
         boolean selfPressed = selfTriggerKey.get().isPressed();
         if (selfPressed && !wasSelfTriggerPressed && moduleMode.get() == ModuleMode.Requester) {
-            // Safety: Only trigger if no GUI is open and the walker isn't currently busy
             if (mc.currentScreen == null && (walkState == WalkState.IDLE || walkState == WalkState.ABORTED)) {
                 long now = System.currentTimeMillis();
                 if (now - lastTriggerMs.get() >= pullCooldown.get() * 1000L) {
@@ -674,7 +680,6 @@ public class PearlPulse extends Module {
         String phrase = validPhrases.isEmpty() ? "tp"
             : validPhrases.get((int) (Math.random() * validPhrases.size()));
 
-        // Generate 4 random characters to bypass spam locks
         String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < 4; i++) {
@@ -685,9 +690,9 @@ public class PearlPulse extends Module {
         info("Sent pull request to §6" + bot + " §r(phrase: " + phrase + ").");
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Pearl memory update
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     private void updatePearlMemory() {
         Map<String, Vec3d[]> lines = columnLines.get();
@@ -718,16 +723,15 @@ public class PearlPulse extends Module {
 
             pingQueued.set(true);
 
-            // Build discovery message — coords controlled by CoordVisibility setting.
             String msg = "[PearlPulse] New stasis pearl — owner: " + ownerName;
             if (trapdoor != null) msg = withPos(msg, trapdoor);
             mc.player.sendMessage(Text.literal(msg), false);
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Notify requester via /msg
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // Notify & Pull execution
+    // ═══════════════════════════════════════════════════════════════
 
     private void sendNotifyMessage(String target) {
         if (!notifyEnabled.get()) return;
@@ -735,10 +739,6 @@ public class PearlPulse extends Module {
         String msg = notifyMessage.get().replace("{player}", target);
         mc.player.networkHandler.sendChatMessage("/msg " + target + " " + msg);
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Pull execution
-    // ═══════════════════════════════════════════════════════════════════════════
 
     private void executePull(String requester) {
         if (mc.world == null || mc.player == null) return;
@@ -752,7 +752,6 @@ public class PearlPulse extends Module {
                 if (!pearlStillExists(rec.entityId())) continue;
                 if (!isAnyTrapdoor(mc.world.getBlockState(rec.trapdoor()).getBlock())) continue;
 
-                // Safety: Never pull the bot's own pearl
                 if (!botName.isEmpty() && rec.owner().equalsIgnoreCase(botName)) continue;
 
                 candidates.add(rec);
@@ -761,10 +760,6 @@ public class PearlPulse extends Module {
 
         if (candidates.isEmpty()) candidates = scanLiveTargets();
 
-        // ── Filter for Requester ──────────────────────────────────────────────
-        // If a specific player triggered this, we only look for their pearl.
-        // Known pearls belonging to others are discarded. "unknown" is kept
-        // as a potential match since owner data is often missing for stasis pearls.
         if (requester != null) {
             candidates.removeIf(rec ->
                 !rec.owner().equalsIgnoreCase(requester) && !rec.owner().equalsIgnoreCase("unknown")
@@ -779,9 +774,7 @@ public class PearlPulse extends Module {
 
         Vec3d playerPos = mc.player.getPos();
 
-        // Unified sorting logic: Requester Priority -> PullOrder Logic
         candidates.sort((a, b) -> {
-            // 1. Priority: Requester's own pearls first
             if (requester != null) {
                 boolean aMine = a.owner().equalsIgnoreCase(requester);
                 boolean bMine = b.owner().equalsIgnoreCase(requester);
@@ -789,7 +782,6 @@ public class PearlPulse extends Module {
                 if (!aMine && bMine) return 1;
             }
 
-            // 2. Secondary: Mode-based sorting
             if (pullOrder.get() == PullOrder.NEAREST) {
                 double da = playerPos.squaredDistanceTo(Vec3d.ofCenter(a.trapdoor()));
                 double db = playerPos.squaredDistanceTo(Vec3d.ofCenter(b.trapdoor()));
@@ -818,14 +810,12 @@ public class PearlPulse extends Module {
             if (e.getType() != EntityType.ENDER_PEARL) continue;
             if (mc.player.distanceTo(e) > range.get()) continue;
 
-            // Resolve owner
             String ownerName = "unknown";
             if (e instanceof EnderPearlEntity pearl) {
                 Entity owner = pearl.getOwner();
                 if (owner != null) ownerName = owner.getName().getString();
             }
 
-            // Safety: Skip bot's own pearl
             if (!botName.isEmpty() && ownerName.equalsIgnoreCase(botName)) continue;
 
             int    px  = (int) Math.floor(e.getX());
@@ -855,9 +845,9 @@ public class PearlPulse extends Module {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Walker — state machine
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     private void beginWalk(BlockPos target) {
         walkTarget   = target;
@@ -877,7 +867,6 @@ public class PearlPulse extends Module {
             return;
         }
 
-        // Destination coord respects CoordVisibility.
         String msg = withPos("[PearlPulse] Path found to", target)
             + " (" + waypoints.size() + " waypoints).";
         mc.player.sendMessage(Text.literal(msg), false);
@@ -885,7 +874,10 @@ public class PearlPulse extends Module {
 
     private void tickWalker() {
         if (walkState == WalkState.IDLE || walkState == WalkState.ABORTED) return;
-        if (mc.player == null || mc.world == null) { abortWalk("Player/world null."); return; }
+        if (mc.player == null || mc.world == null) {
+            abortWalk("Player/world null.");
+            return;
+        }
 
         Vec3d pos = mc.player.getPos();
 
@@ -900,14 +892,16 @@ public class PearlPulse extends Module {
         }
 
         if (mc.player.isOnFire()) {
-            if (abortOnFire.get()) { abortWalk("Player on fire."); return; }
+            if (abortOnFire.get()) {
+                abortWalk("Player on fire.");
+                return;
+            }
             mc.player.sendMessage(Text.literal("[PearlPulse] Warning: on fire."), false);
         }
 
         if (jumpCooldown > 0) jumpCooldown--;
 
         switch (walkState) {
-
             case WALKING_TO -> {
                 walkTicks++;
 
@@ -971,7 +965,6 @@ public class PearlPulse extends Module {
                 double distToFinal = walkTarget != null
                     ? pos.distanceTo(Vec3d.ofCenter(walkTarget)) : distToWaypoint;
                 boolean inSlowZone = distToFinal <= slowZoneRadius.get();
-
                 faceAndWalkToward(pos, currentWaypoint, !inSlowZone);
             }
 
@@ -1150,8 +1143,8 @@ public class PearlPulse extends Module {
     }
 
     private void faceAndWalkToward(Vec3d from, Vec3d to, boolean sprint) {
-        double dx    = to.x - from.x;
-        double dz    = to.z - from.z;
+        double dx = to.x - from.x;
+        double dz = to.z - from.z;
 
         float pYaw = MathHelper.wrapDegrees(mc.player.getYaw());
         float targetYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
@@ -1204,9 +1197,9 @@ public class PearlPulse extends Module {
         resetWalkerFields();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Trapdoor helpers
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════
 
     private BlockPos findTrapdoor(int x, int topY, int z) {
         for (int dy = 0; dy <= 3; dy++) {
@@ -1222,7 +1215,7 @@ public class PearlPulse extends Module {
             || block == Blocks.BIRCH_TRAPDOOR    || block == Blocks.JUNGLE_TRAPDOOR
             || block == Blocks.ACACIA_TRAPDOOR   || block == Blocks.DARK_OAK_TRAPDOOR
             || block == Blocks.MANGROVE_TRAPDOOR || block == Blocks.CHERRY_TRAPDOOR
-            || block == Blocks.BAMBOO_TRAPDOOR   || block == Blocks.CRIMSON_TRAPDOOR
+            || block == Blocks.BAMBOO_TRAPDOOR || block == Blocks.CRIMSON_TRAPDOOR
             || block == Blocks.WARPED_TRAPDOOR   || block == Blocks.IRON_TRAPDOOR;
     }
 
@@ -1233,7 +1226,6 @@ public class PearlPulse extends Module {
             BlockHitResult hit    = new BlockHitResult(hitVec, Direction.UP, pos, false);
             ActionResult   result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
 
-            // Interaction result message — coords respect CoordVisibility.
             String base = result.isAccepted()
                 ? "[PearlPulse] Trapdoor activated"
                 : "[PearlPulse] Interaction failed";
@@ -1241,9 +1233,9 @@ public class PearlPulse extends Module {
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Background column scan
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
 
     private void triggerColumnScan() {
         if (!scanPending.compareAndSet(false, true)) return;
@@ -1269,13 +1261,13 @@ public class PearlPulse extends Module {
     }
 
     private void runColumnScan(BlockPos origin, int r, Map<Long, WorldChunk> chunks) {
-        Map<String, int[]>   yExtents = new HashMap<>();
+        Map<String, int[]> yExtents = new HashMap<>();
         Map<String, Vec3d[]> newLines = new LinkedHashMap<>();
 
-        int minX = origin.getX() - r, maxX = origin.getX() + r;
-        int minY = Math.max(origin.getY() - r, -64);
-        int maxY = Math.min(origin.getY() + r, 320);
-        int minZ = origin.getZ() - r, maxZ = origin.getZ() + r;
+        int minX = origin.getX() - r, maxX = origin.getX() + r,
+            minY = Math.max(origin.getY() - r, -64),
+            maxY = Math.min(origin.getY() + r, 320),
+            minZ = origin.getZ() - r, maxZ = origin.getZ() + r;
 
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
@@ -1320,32 +1312,49 @@ public class PearlPulse extends Module {
         columnLines.set(newLines);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Render
-    // ═══════════════════════════════════════════════════════════════════════════
-
+    // ═══════════════════════════════════════════════════════════════
     @EventHandler
     private void onRender3D(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
 
+        if (renderMode.get() == RenderMode.Default) {
+            renderDefaultMode(event);
+        } else {
+            renderPearlsOnlyMode(event);
+        }
+    }
+
+    private void renderDefaultMode(Render3DEvent event) {
         boolean     doBeam = columnsEnabled.get();
         CapPosition cap    = capPosition.get();
         boolean     doCap  = cap != CapPosition.NONE;
         if (!doBeam && !doCap) return;
 
         int r = range.get();
-        Map<String, Double>  colKeyToPearlY = new HashMap<>();
-        Map<String, Vec3d[]> lines          = columnLines.get();
+        Map<String, Vec3d[]> lines = columnLines.get();
+        
+        // Stores the exact X, Y, Z of the pearl to dynamically center the beam
+        Map<String, Vec3d> activePearlPos = new HashMap<>();
+        // Track the actual Entity IDs that are active so we can manage outlines correctly
+        Set<Integer> activePearlIds = new HashSet<>();
 
         for (Entity e : mc.world.getEntities()) {
             if (e.getType() != EntityType.ENDER_PEARL) continue;
             if (mc.player.distanceTo(e) > r) continue;
-            Vec3d  pos = e.getLerpedPos(mc.getRenderTickCounter().getTickDelta(true));
+
+            Vec3d pos = e.getLerpedPos(mc.getRenderTickCounter().getTickDelta(true));
             int    px  = (int) Math.floor(e.getX());
             int    pz  = (int) Math.floor(e.getZ());
             String key = px + "," + pz;
             Vec3d[] line = lines.get(key);
-            if (line != null && pos.y >= line[0].y) colKeyToPearlY.put(key, pos.y);
+
+            // Only track pearls that are actually inside a valid bubble column
+            if (line != null && pos.y >= line[0].y) {
+                activePearlPos.put(key, pos);
+                activePearlIds.add(e.getId()); // Track by ID
+            }
         }
 
         SettingColor core      = coreColor.get();
@@ -1362,30 +1371,188 @@ public class PearlPulse extends Module {
         boolean      capBloom = capGlow.get();
 
         for (Map.Entry<String, Vec3d[]> entry : lines.entrySet()) {
-            Double pearlY = colKeyToPearlY.get(entry.getKey());
-            if (pearlY == null) continue;
+            Vec3d pearlPos = activePearlPos.get(entry.getKey());
+            if (pearlPos == null) continue;
 
             Vec3d[] line = entry.getValue();
-            double  cx   = line[0].x, cz = line[0].z;
-            double  botY = line[0].y, topY = pearlY;
+            
+            // DYNAMIC ALIGNMENT: Use the pearl's exact X and Z to center the beam
+            double cx = pearlPos.x;
+            double cz = pearlPos.z;
+            double botY = line[0].y;
+            double topY = pearlPos.y;
 
-            if (doBeam) drawGlowBeam(event, cx, botY, cz, topY, core, glow,
-                halfCore, spread, layers, baseAlpha);
+            if (doBeam) {
+                drawGlowBeam(event, cx, botY, cz, topY, core, glow,
+                    halfCore, spread, layers, baseAlpha);
+            }
 
             if (doCap) {
                 boolean db = (cap == CapPosition.BOTTOM || cap == CapPosition.BOTH);
                 boolean dt = (cap == CapPosition.TOP    || cap == CapPosition.BOTH);
-                if (db) drawCapBox(event, cx, botY, cz, capHalf, capThick, capCol,
-                    capMode, capBloom, spread, layers, baseAlpha);
-                if (dt) drawCapBox(event, cx, topY, cz, capHalf, capThick, capCol,
-                    capMode, capBloom, spread, layers, baseAlpha);
+                if (db) {
+                    drawCapBox(event, cx, botY, cz, capHalf, capThick, capCol,
+                            capMode, capBloom, spread, layers, baseAlpha);
+                }
+                if (dt) {
+                    drawCapBox(event, cx, topY, cz, capHalf, capThick, capCol,
+                            capMode, capBloom, spread, layers, baseAlpha);
+                }
+            }
+        }
+
+        // Apply entity outlines to pearls actively inside the beam to align with bobbing
+        for (Entity e : mc.world.getEntities()) {
+            if (!(e instanceof EnderPearlEntity pearl)) continue;
+            if (mc.player.distanceTo(e) > r) continue;
+            
+            // Check against the Integer Set instead of the String Map
+            if (!activePearlIds.contains(pearl.getId())) continue;
+
+            boolean isOwn = pearl.getOwner() != null && pearl.getOwner().equals(mc.player);
+
+            if (isOwn && highlightOwnPearl.get()) {
+                GlowingRegistry.add(pearl.getId(), buildGlowArgb(ownPearlColor.get(), 3));
+                trackedGlowIds.add(pearl.getId());
+            } else if (!isOwn) {
+                GlowingRegistry.add(pearl.getId(), buildGlowArgb(coreColor.get(), 3));
+                trackedGlowIds.add(pearl.getId());
+            }
+        }
+
+        // Cleanup ghost outlines if pearl is pulled or moves out of beam
+        for (Iterator<Integer> it = trackedGlowIds.iterator(); it.hasNext(); ) {
+            int id = it.next();
+            // Check against the Integer Set instead of the String Map
+            if (!activePearlIds.contains(id) || mc.world.getEntityById(id) == null) {
+                GlowingRegistry.remove(id);
+                it.remove();
             }
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Render helpers
-    // ═══════════════════════════════════════════════════════════════════════════
+    private void renderPearlsOnlyMode(Render3DEvent event) {
+        int r = range.get();
+        Set<Integer> activePearlIds = new HashSet<>();
+
+        for (Entity e : mc.world.getEntities()) {
+            if (!(e instanceof EnderPearlEntity pearl)) continue;
+            if (mc.player.distanceTo(e) > r) continue;
+
+            int pearlId = pearl.getId();
+            activePearlIds.add(pearlId);
+            boolean isOwn = pearl.getOwner() != null && pearl.getOwner().equals(mc.player);
+
+            if (isOwn && highlightOwnPearl.get()) {
+                if (poOwnOutlineEnabled.get()) {
+                    GlowingRegistry.add(pearlId, buildGlowArgb(poOwnOutlineColor.get(), poOwnGlowStrength.get()));
+                    trackedGlowIds.add(pearlId);
+                } else {
+                    GlowingRegistry.remove(pearlId);
+                    trackedGlowIds.remove(pearlId);
+                }
+            } else {
+                if (poOutlineEnabled.get()) {
+                    GlowingRegistry.add(pearlId, buildGlowArgb(poOutlineColor.get(), poGlowStrength.get()));
+                    trackedGlowIds.add(pearlId);
+                } else {
+                    GlowingRegistry.remove(pearlId);
+                    trackedGlowIds.remove(pearlId);
+                }
+            }
+
+            if (isInBubbleColumn(pearl)) {
+                if (isOwn && highlightOwnPearl.get()) {
+                    if (poOwnBeamEnabled.get()) {
+                        renderPearlsOnlyBeam(event, pearl, poOwnBeamColor.get(),
+                                poOwnBeamInnerRadius.get().floatValue(), poOwnBeamOuterRadius.get().floatValue(),
+                                poOwnBeamHeight.get());
+                    }
+                } else {
+                    if (poBeamEnabled.get()) {
+                        renderPearlsOnlyBeam(event, pearl, poBeamColor.get(),
+                                poBeamInnerRadius.get().floatValue(), poBeamOuterRadius.get().floatValue(),
+                                poBeamHeight.get());
+                    }
+                }
+            }
+        }
+
+        for (Iterator<Integer> it = trackedGlowIds.iterator(); it.hasNext(); ) {
+            int id = it.next();
+            if (!activePearlIds.contains(id) || mc.world.getEntityById(id) == null) {
+                GlowingRegistry.remove(id);
+                it.remove();
+            }
+        }
+
+        BEAM_POS_CACHE.keySet().removeIf(id -> mc.world.getEntityById(id) == null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Render Helpers
+    // ═════════════════════════════════════════════════════════════
+
+    private int buildGlowArgb(SettingColor c, int strength) {
+        float factor = 1f + (strength - 1) * 0.15f;
+        int r = Math.min(255, (int)(c.r * factor));
+        int g = Math.min(255, (int)(c.g * factor));
+        int b = Math.min(255, (int)(c.b * factor));
+        return (255 << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    private boolean isInBubbleColumn(EnderPearlEntity pearl) {
+        if (mc.world == null) return false;
+        BlockPos pos = BlockPos.ofFloored(pearl.getPos());
+        return mc.world.getBlockState(pos).isOf(Blocks.BUBBLE_COLUMN)
+            || mc.world.getBlockState(pos.down()).isOf(Blocks.BUBBLE_COLUMN);
+    }
+
+    private Vec3d getOrCreateBeamPos(EnderPearlEntity pearl) {
+        return BEAM_POS_CACHE.computeIfAbsent(pearl.getId(), id -> {
+            double x = pearl.getX();
+            double y = pearl.getY();
+            double z = pearl.getZ();
+            BlockPos.Mutable pos = new BlockPos.Mutable();
+
+            for (int i = 1; i < 256; i++) {
+                pos.set((int) Math.floor(x), (int) (y - i), (int) Math.floor(z));
+                BlockState state = mc.world.getBlockState(pos);
+
+                if (!state.isOf(Blocks.WATER) && !state.isOf(Blocks.BUBBLE_COLUMN)) {
+                    return new Vec3d(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5);
+                }
+            }
+            return new Vec3d(Math.floor(x) + 0.5, y - 256, Math.floor(z) + 0.5);
+        });
+    }
+
+    private void renderPearlsOnlyBeam(Render3DEvent event, EnderPearlEntity pearl,
+                                      SettingColor color, float innerRadius, float outerRadius, int height) {
+        Camera camera = mc.gameRenderer.getCamera();
+        Vec3d camPos = camera.getPos();
+        Vec3d base = getOrCreateBeamPos(pearl);
+
+        MatrixStack matrices = event.matrices;
+        matrices.push();
+
+        matrices.translate(
+            base.x - camPos.x - 0.5,
+            base.y - camPos.y,
+            base.z - camPos.z - 0.5
+        );
+
+        VertexConsumerProvider.Immediate immediate = mc.getBufferBuilders().getEntityVertexConsumers();
+
+        BeaconBlockEntityRenderer.renderBeam(
+            matrices, immediate, BEAM_TEXTURE, event.tickDelta,
+            1.0f, mc.world.getTime(), 0, height,
+            color.getPacked(), innerRadius, outerRadius
+        );
+
+        immediate.draw();
+        matrices.pop();
+    }
 
     private void drawGlowBeam(Render3DEvent event, double cx, double botY, double cz, double topY,
             SettingColor core, SettingColor glow, double halfCore,
@@ -1420,9 +1587,9 @@ public class PearlPulse extends Module {
             withAlpha(color, color.a), color, mode, 0);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Utilities
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════
 
     private double xzDist(Vec3d a, Vec3d b) {
         double dx = a.x - b.x, dz = a.z - b.z;

@@ -5,11 +5,15 @@ import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
+import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.item.Item;
+import net.minecraft.item.Items;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
@@ -46,6 +50,7 @@ public class EndSafe extends Module {
     private final SettingGroup sgOverworld    = settings.createGroup("Overworld Thresholds");
     private final SettingGroup sgEnd          = settings.createGroup("End Thresholds");
     private final SettingGroup sgGrace        = settings.createGroup("Grace Period");
+    private final SettingGroup sgChorus       = settings.createGroup("Chorus Escape");
 
     // -------------------------------------------------------------------------
     // General
@@ -195,34 +200,94 @@ public class EndSafe extends Module {
     );
 
     // -------------------------------------------------------------------------
+    // Chorus Escape
+    // -------------------------------------------------------------------------
+    private final Setting<Keybind> chorusEscapeKey = sgChorus.add(new KeybindSetting.Builder()
+        .name("chorus-escape-key")
+        .description("Eats a chorus fruit to escape the void. Ignores warnings/disconnects while active and disables module on landing.")
+        .defaultValue(Keybind.none())
+        .build()
+    );
+
+    // -------------------------------------------------------------------------
     // State
     // -------------------------------------------------------------------------
-    private boolean hasDisconnected  = false;
-    private int     warnTickCounter  = 0;
-    private int     graceTickCounter = 0;
+    private boolean hasDisconnected    = false;
+    private int     warnTickCounter    = 0;
+    private int     graceTickCounter   = 0;
+    
+    private boolean chorusEscapeActive = false;
+    private boolean hasTriggeredEat    = false;
+    private boolean wasChorusPressed   = false;
 
     public EndSafe() {
-        super(HuntingUtilities.CATEGORY, "EndSafe", "Protects you from the void by warning or disconnecting at low Y levels.");
+        super(HuntingUtilities.CATEGORY, "EndSafe", "Protects you from the void by warning, disconnecting, or chorus teleporting at low Y levels.");
     }
 
     @Override
     public void onActivate() {
-        hasDisconnected  = false;
-        warnTickCounter  = 0;
-        graceTickCounter = 0;
+        hasDisconnected    = false;
+        warnTickCounter    = 0;
+        graceTickCounter   = 0;
+        chorusEscapeActive = false;
+        hasTriggeredEat    = false;
+        wasChorusPressed   = false;
     }
 
     @Override
     public void onDeactivate() {
-        hasDisconnected  = false;
-        warnTickCounter  = 0;
-        graceTickCounter = 0;
+        hasDisconnected    = false;
+        warnTickCounter    = 0;
+        graceTickCounter   = 0;
+        
+        // Safety: release right click if the module is manually toggled off mid-eat
+        if (mc.options != null) mc.options.useKey.setPressed(false);
+        
+        chorusEscapeActive = false;
+        hasTriggeredEat    = false;
+        wasChorusPressed   = false;
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
 
+        // -----------------------------------------------------------------
+        // Chorus Escape Keybind Logic
+        // -----------------------------------------------------------------
+        boolean chorusPressed = chorusEscapeKey.get().isPressed();
+        if (chorusPressed && !wasChorusPressed && !chorusEscapeActive) {
+            chorusEscapeActive = true;
+            hasTriggeredEat = false;
+        }
+        wasChorusPressed = chorusPressed;
+
+        if (chorusEscapeActive) {
+            if (!hasTriggeredEat) {
+                if (!selectHotbarItem(Items.CHORUS_FRUIT)) {
+                    warning("No Chorus Fruit found in hotbar! Falling back to normal EndSafe logic.");
+                    chorusEscapeActive = false;
+                    // Fall through to normal logic so disconnect can still save you
+                } else {
+                    mc.options.useKey.setPressed(true);
+                    hasTriggeredEat = true;
+                    return; // Bypass normal EndSafe logic while eating
+                }
+            } else {
+                // Wait until the eating process finishes (which triggers the teleport)
+                if (!mc.player.isUsingItem()) {
+                    mc.options.useKey.setPressed(false);
+                    info("Chorus escape successful. Disabling EndSafe.");
+                    toggle();
+                    return;
+                }
+                return; // Bypass normal EndSafe logic while eating/teleporting
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Normal Dimension & Y-Level Logic
+        // -----------------------------------------------------------------
         boolean inEnd      = mc.world.getDimensionEntry().matchesKey(DimensionTypes.THE_END);
         boolean inOverworld = mc.world.getDimensionEntry().matchesKey(DimensionTypes.OVERWORLD);
 
@@ -342,5 +407,16 @@ public class EndSafe extends Module {
     private void resetCounters() {
         warnTickCounter  = 0;
         graceTickCounter = 0;
+    }
+
+    private boolean selectHotbarItem(Item item) {
+        if (mc.player == null) return false;
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getStack(i).isOf(item)) {
+                mc.player.getInventory().selectedSlot = i;
+                return true;
+            }
+        }
+        return false;
     }
 }

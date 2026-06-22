@@ -66,8 +66,6 @@ public abstract class HandledScreenMixin extends Screen {
                     net.minecraft.client.gui.tooltip.Tooltip.of(Text.literal("Save Current Layout"))));
                 by += 25;
 
-                // FIX #2: Added guard — when NOT in save mode and the preset is empty,
-                // clicking is a no-op instead of starting a futile regear/replenish cycle.
                 this.addDrawableChild(mouseOnly(Text.literal("1"),
                     btn -> {
                         if (!inv101.isSaveMode() && inv101.isPresetEmpty(1)) return;
@@ -121,9 +119,9 @@ public abstract class HandledScreenMixin extends Screen {
         // ── LootLens / DungeonAssistant Steal+Dump buttons (RIGHT side) ──────────────
         if (containerSlots <= 0) return;
 
-        LootLens ll          = Modules.get().get(LootLens.class);
-        boolean  llHandled   = ll != null && ll.isActive();
-        if (llHandled) {
+        LootLens ll = Modules.get().get(LootLens.class);
+        // Changed to use shouldShowStealDumpButtons(), which checks both if the module is active AND if the setting is toggled on
+        if (ll != null && ll.shouldShowStealDumpButtons()) {
             addStealDumpButtons(screen, containerSlots);
         } else {
             DungeonAssistant da = Modules.get().get(DungeonAssistant.class);
@@ -183,22 +181,6 @@ public abstract class HandledScreenMixin extends Screen {
     }
 
     // ── Helper: Shared Steal/Dump buttons ────────────────────────────────────────────
-    // FIX #1: Merged the identical addDungeonAssistantButtons and addLootLensButtons
-    // into a single method. The two former methods had 100% identical S/D logic — any
-    // bug fix or feature change would need to be applied twice, which is error-prone.
-    //
-    // FIX #3: S/D buttons now use the mouseOnly() wrapper so they cannot be
-    // accidentally triggered by keyboard input while the player is typing or using
-    // hotkeys inside the GUI. Previously they used ButtonWidget.Builder directly,
-    // which responds to keyboard events.
-    //
-    // FIX #4: Added tooltips to S/D buttons for discoverability.
-    //
-    // FIX #5: The D (Dump) button now dumps the FULL player inventory including the
-    // hotbar. The original used `end = slots.size() - 9` which silently skipped the
-    // hotbar — "Dump" conventionally means "dump everything," and silently omitting
-    // 9 slots was a behavioral bug that confused users.
-
     private void addStealDumpButtons(HandledScreen<?> screen, int containerSlots) {
         int buttonX = this.x + this.backgroundWidth + 5;
         int buttonY = this.y + 5;
@@ -219,14 +201,6 @@ public abstract class HandledScreenMixin extends Screen {
         // D = Dump: shift-click all player inventory items (including hotbar) into the container
         this.addDrawableChild(mouseOnly(Text.literal("D"),
             button -> {
-                // FIX #5: Changed from `slots.size() - 9` to `slots.size()`.
-                // The original skipped the last 9 slots (hotbar) by computing
-                // `end = slots.size() - 9`. The slot layout in a GenericContainerScreenHandler is:
-                //   [0 .. containerSlots-1]   = container
-                //   [containerSlots .. size-1] = player inventory (main + hotbar)
-                // Skipping the last 9 meant hotbar items were never dumped, which is
-                // surprising for a button labelled "Dump". Now the full player inventory
-                // is iterated; empty slots are already skipped by the isEmpty() check.
                 for (int i = containerSlots; i < screen.getScreenHandler().slots.size(); i++) {
                     if (screen.getScreenHandler().getSlot(i).getStack().isEmpty()) continue;
                     client.interactionManager.clickSlot(

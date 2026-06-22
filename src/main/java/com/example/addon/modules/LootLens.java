@@ -129,6 +129,14 @@ public class LootLens extends Module {
         .defaultValue(List.of(Items.ENCHANTED_GOLDEN_APPLE, Items.ELYTRA)).build()
     );
 
+    // ADDED: Toggleable setting for Steal/Dump buttons
+    private final Setting<Boolean> stealDumpButtons = sgGeneral.add(new BoolSetting.Builder()
+        .name("steal-dump-buttons")
+        .description("Show steal and dump buttons on container screens.")
+        .defaultValue(true)
+        .build()
+    );
+
     private final Setting<RenderMode> renderMode = sgGeneral.add(new EnumSetting.Builder<RenderMode>()
         .name("render-mode")
         .description("GLOW = layered bloom boxes. SPECTRAL = spectral arrow outline for entities, subtle fill for blocks.")
@@ -1185,6 +1193,11 @@ public class LootLens extends Module {
     // ─────────────────────────── Public API ───────────────────────────
 
     public int getTotalContainers() { return containers.size(); }
+
+    // ADDED: Public API to allow the HandledScreenMixin to check if it should render the S/D buttons
+    public boolean shouldShowStealDumpButtons() {
+        return isActive() && stealDumpButtons.get();
+    }
 
     public int getDoubleChestCount() {
         if (mc.world == null) return 0;
