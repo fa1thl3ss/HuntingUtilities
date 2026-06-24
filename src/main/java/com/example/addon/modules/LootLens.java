@@ -3,9 +3,11 @@ package com.example.addon.modules;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import com.example.addon.HuntingUtilities;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -82,15 +84,11 @@ public class LootLens extends Module {
     private final Map<Vec3d, GlowItemFrameEntity> glowItemFrameEntities      = new HashMap<>();
     private final Set<Vec3d>                      notifiedItemFrames         = new HashSet<>();
 
-    // Chest-minecart specific: must be opened+confirmed before showing beam
     private final Set<BlockPos>                   minecartInventoryChecked   = new HashSet<>();
 
-    // Stacked minecart tracking.
-    // Map value = last known count at that position; re-notification fires whenever
-    // the count changes (matching the count-aware logic originally in DungeonAssistant).
-    private final Map<BlockPos, Integer>          knownStackedMinecarts      = new HashMap<>();
+    // Stacked minecart tracking — tracked by Cluster UUID to survive movement without spam.
+    private final Map<UUID, StackedState>         knownStackedMinecarts      = new HashMap<>();
 
-    // Bed tracking: HEAD pos → DyeColor
     private final Map<BlockPos, DyeColor>         bedPositions               = new HashMap<>();
 
     private BlockPos lastOpenedContainer    = null;
@@ -129,7 +127,6 @@ public class LootLens extends Module {
         .defaultValue(List.of(Items.ENCHANTED_GOLDEN_APPLE, Items.ELYTRA)).build()
     );
 
-    // ADDED: Toggleable setting for Steal/Dump buttons
     private final Setting<Boolean> stealDumpButtons = sgGeneral.add(new BoolSetting.Builder()
         .name("steal-dump-buttons")
         .description("Show steal and dump buttons on container screens.")
@@ -390,7 +387,8 @@ public class LootLens extends Module {
         containers.clear(); inventoryCheckedContainers.clear(); scannedByScanner.clear();
         shulkerContainers.clear(); shulkerCounts.clear();
         itemFrameEntities.clear(); glowItemFrameEntities.clear(); notifiedItemFrames.clear();
-        minecartInventoryChecked.clear(); knownStackedMinecarts.clear();
+        minecartInventoryChecked.clear();
+        knownStackedMinecarts.clear();
         bedPositions.clear();
         lastOpenedContainer = null; screenInventoryChecked = false; cleanupTimer = 0;
     }
@@ -451,16 +449,15 @@ public class LootLens extends Module {
 
     // ─────────────────────────── Helpers ───────────────────────────
 
-    /**
-     * Returns true for types that highlight immediately on detection without needing
-     * the container to be opened. Chests, barrels, and chest minecarts require opening + confirmation.
-     */
     private boolean isImmediateHighlight(StorageType type) {
         return switch (type) {
             case SHULKER_BOX, ENDER_CHEST, UTILITY, DECORATIVE -> true;
-            // CHEST_MINECART intentionally moved here — needs open+confirm, same as chests/barrels
             case CHEST, TRAPPED_CHEST, BARREL, CHEST_MINECART -> false;
         };
+    }
+
+    private boolean bposEquals(BlockPos a, BlockPos b) {
+        return a != null && a.equals(b);
     }
 
     // ─────────────────────────── Container Logic ───────────────────────────
@@ -481,7 +478,6 @@ public class LootLens extends Module {
         StorageType type = containers.get(lastOpenedContainer);
         if (type != null && isImmediateHighlight(type)) return;
 
-        // Mark inventory as checked (works for both block containers and minecarts)
         inventoryCheckedContainers.add(lastOpenedContainer);
         if (type == StorageType.CHEST_MINECART) minecartInventoryChecked.add(lastOpenedContainer);
 
@@ -497,7 +493,15 @@ public class LootLens extends Module {
                 info("%d %s found!", shulkerCount, shulkerCount == 1 ? "item" : "items");
             }
         } else {
-            containers.remove(lastOpenedContainer); shulkerContainers.remove(lastOpenedContainer); shulkerCounts.remove(lastOpenedContainer);
+            if (type == StorageType.CHEST_MINECART
+                    && knownStackedMinecarts.values().stream().anyMatch(
+                        st -> st.stacked && bposEquals(st.lastBlockPos, lastOpenedContainer))) {
+                minecartInventoryChecked.add(lastOpenedContainer);
+                return;
+            }
+            containers.remove(lastOpenedContainer);
+            shulkerContainers.remove(lastOpenedContainer);
+            shulkerCounts.remove(lastOpenedContainer);
             minecartInventoryChecked.remove(lastOpenedContainer);
             if (adjacentChest != null) { containers.remove(adjacentChest); shulkerContainers.remove(adjacentChest); shulkerCounts.remove(adjacentChest); }
             if (previouslyHad && notification.get()) info("0 items found, removing highlight.");
@@ -558,68 +562,181 @@ public class LootLens extends Module {
             playerPos.getX() + scanRange, playerPos.getY() + scanRange, playerPos.getZ() + scanRange
         );
 
-        // Count minecarts per block position to detect stacking.
-        Map<BlockPos, Integer> positionCount = new HashMap<>();
-        Set<BlockPos> currentMinecartPositions = new HashSet<>();
-
-        for (ChestMinecartEntity minecart : mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, entity -> true)) {
-            BlockPos pos = minecart.getBlockPos();
-            currentMinecartPositions.add(pos);
-            positionCount.merge(pos, 1, Integer::sum);
-            containers.putIfAbsent(pos, StorageType.CHEST_MINECART);
-        }
-
-        // ── Stacked minecart detection ────────────────────────────────────────
-        // Uses a Map<BlockPos, Integer> (count-aware) so notification fires again
-        // if the number of stacked minecarts at a position changes (e.g. 2 → 5).
-        int threshold = stackedMinecartThreshold.get();
-        Set<BlockPos> currentStacked = new HashSet<>();
-        for (Map.Entry<BlockPos, Integer> entry : positionCount.entrySet()) {
-            if (entry.getValue() >= threshold) currentStacked.add(entry.getKey());
-        }
-
-        for (BlockPos pos : currentStacked) {
-            int count      = positionCount.get(pos);
-            int knownCount = knownStackedMinecarts.getOrDefault(pos, 0);
-            if (count != knownCount) {
-                knownStackedMinecarts.put(pos, count);
-                // Force a beam for this position via shulkerContainers
-                shulkerContainers.add(pos);
-                shulkerCounts.put(pos, count);
-                if (notification.get() && mc.player != null) {
-                    info("§eStacked minecarts detected! §f%d§e minecarts at one position. §7Total stacked groups: §f%d",
-                        count, currentStacked.size());
-                    mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f);
+        List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, e -> true);
+        
+        // Group minecarts into clusters based on proximity
+        List<Set<ChestMinecartEntity>> clusters = new ArrayList<>();
+        Set<ChestMinecartEntity> assigned = new HashSet<>();
+        
+        for (ChestMinecartEntity m1 : minecarts) {
+            if (assigned.contains(m1)) continue;
+            Set<ChestMinecartEntity> cluster = new HashSet<>();
+            cluster.add(m1);
+            assigned.add(m1);
+            
+            for (ChestMinecartEntity m2 : minecarts) {
+                if (assigned.contains(m2)) continue;
+                if (m1.squaredDistanceTo(m2) < 0.5) {
+                    cluster.add(m2);
+                    assigned.add(m2);
                 }
             }
+            clusters.add(cluster);
         }
 
-        // Clear stale stacked tracking entries; log if groups are removed
+        Set<UUID> seenClusterIds = new HashSet<>();
+        Set<BlockPos> currentMinecartPositions = new HashSet<>();
+
+        for (Set<ChestMinecartEntity> cluster : clusters) {
+            if (cluster.isEmpty()) continue;
+            
+            int count = cluster.size();
+            Vec3d centroid = new Vec3d(0, 0, 0);
+            UUID clusterId = null;
+            
+            for (ChestMinecartEntity m : cluster) {
+                centroid = centroid.add(m.getPos());
+                currentMinecartPositions.add(m.getBlockPos());
+                containers.putIfAbsent(m.getBlockPos(), StorageType.CHEST_MINECART);
+                if (clusterId == null || m.getUuid().compareTo(clusterId) < 0) {
+                    clusterId = m.getUuid();
+                }
+            }
+            centroid = centroid.multiply(1.0 / count);
+            BlockPos bpos = BlockPos.ofFloored(centroid);
+            
+            seenClusterIds.add(clusterId);
+            updateStackedMinecartState(clusterId, bpos, centroid, count);
+        }
+
+        // Expire states whose minecarts have vanished entirely
+        Iterator<Map.Entry<UUID, StackedState>> it = knownStackedMinecarts.entrySet().iterator();
         int removed = 0;
-        java.util.Iterator<BlockPos> it = knownStackedMinecarts.keySet().iterator();
         while (it.hasNext()) {
-            if (!currentStacked.contains(it.next())) { it.remove(); removed++; }
+            Map.Entry<UUID, StackedState> e = it.next();
+            UUID id = e.getKey();
+            StackedState s = e.getValue();
+            if (seenClusterIds.contains(id)) continue;
+
+            if (++s.missingTicks < 3) continue; // brief vanish — keep
+
+            boolean wasStacked = s.stacked;
+            if (wasStacked) {
+                clearStackedHighlight(s, id, s.lastBlockPos);
+            }
+            it.remove();
+            if (wasStacked) removed++;
         }
         if (removed > 0 && notification.get() && mc.player != null) {
-            int remaining = knownStackedMinecarts.size();
+            int remaining = (int) knownStackedMinecarts.values().stream().filter(st -> st.stacked).count();
             if (remaining > 0)
                 info("§7%d stacked minecart group(s) cleared. §f%d §7group(s) remaining.", removed, remaining);
             else
                 info("§7All stacked minecart groups cleared.");
         }
 
-        // Remove minecart container entries that are no longer present.
-        // Stacked (known) positions are kept as long as they remain in knownStackedMinecarts.
+        // Remove minecart container entries that are no longer present
         containers.entrySet().removeIf(entry -> {
             if (entry.getValue() != StorageType.CHEST_MINECART) return false;
             BlockPos pos = entry.getKey();
             if (currentMinecartPositions.contains(pos)) return false;
-            if (knownStackedMinecarts.containsKey(pos)) return false; // keep stacked permanently until cleared
+            if (knownStackedMinecarts.values().stream().anyMatch(st -> st.stacked && bposEquals(st.lastBlockPos, pos))) return false;
             inventoryCheckedContainers.remove(pos); scannedByScanner.remove(pos);
             shulkerContainers.remove(pos); shulkerCounts.remove(pos);
             minecartInventoryChecked.remove(pos);
             return true;
         });
+    }
+
+    private void updateStackedMinecartState(UUID id, BlockPos bpos, Vec3d centroid, int count) {
+        final int entryThreshold = stackedMinecartThreshold.get();
+        final int exitThreshold  = Math.max(1, entryThreshold - 1);
+
+        StackedState s = knownStackedMinecarts.get(id);
+        
+        // If it's not stacked and doesn't meet entry threshold, don't even track it.
+        if (s == null && count < entryThreshold) {
+            return; 
+        }
+        
+        if (s == null) s = new StackedState();
+        knownStackedMinecarts.put(id, s);
+        
+        BlockPos oldPos = s.lastBlockPos;
+        s.observedCount = count;
+        s.lastBlockPos  = bpos;
+        s.lastCentroid  = centroid;
+        s.missingTicks  = 0;
+
+        boolean meetsEntry = count >= entryThreshold;
+        boolean meetsExit  = count <= exitThreshold;
+
+        if (!s.stacked) {
+            if (meetsEntry) {
+                if (++s.entryDebounce >= 3) {
+                    enterStacked(s, id, bpos, count);
+                }
+            } else {
+                s.entryDebounce = 0;
+            }
+        } else {
+            if (meetsExit) {
+                if (++s.exitDebounce >= 3) {
+                    clearStackedHighlight(s, id, bpos);
+                    knownStackedMinecarts.remove(id);
+                    if (notification.get() && mc.player != null) {
+                        info("§7Stacked minecart group resolved (below exit threshold).");
+                    }
+                }
+            } else {
+                s.exitDebounce = 0;
+            }
+
+            if (s.stacked && s.confirmedCount != count) {
+                s.confirmedCount = count;
+                if (notification.get() && mc.player != null) {
+                    info("§eStack updated: §f%d§e minecarts at one position.", count);
+                }
+            }
+
+            if (s.stacked && bpos != null && !bpos.equals(oldPos)) {
+                if (oldPos != null) {
+                    shulkerContainers.remove(oldPos);
+                    shulkerCounts.remove(oldPos);
+                }
+                shulkerContainers.add(bpos);
+                shulkerCounts.put(bpos, count);
+            } else if (s.stacked && bpos != null) {
+                shulkerCounts.put(bpos, count);
+            }
+        }
+    }
+
+    private void enterStacked(StackedState s, UUID id, BlockPos bpos, int count) {
+        s.stacked = true;
+        s.confirmedCount = count;
+        s.entryDebounce = 0;
+        s.exitDebounce  = 0;
+        if (bpos != null) {
+            shulkerContainers.add(bpos);
+            shulkerCounts.put(bpos, count);
+        }
+        if (notification.get() && mc.player != null) {
+            info("§dStacked minecarts detected! §f%d§d minecarts at one position.", count);
+            mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f);
+        }
+    }
+
+    private void clearStackedHighlight(StackedState s, UUID id, BlockPos bpos) {
+        s.stacked = false;
+        s.entryDebounce = 0;
+        s.exitDebounce  = 0;
+        if (bpos != null) {
+            if (!minecartInventoryChecked.contains(bpos) || !shulkerCounts.containsKey(bpos)) {
+                shulkerContainers.remove(bpos);
+                shulkerCounts.remove(bpos);
+            }
+        }
     }
 
     private void scanItemFrames() {
@@ -702,9 +819,6 @@ public class LootLens extends Module {
         }
     }
 
-    /**
-     * Maps a DyeColor to a SettingColor matching the approximate in-game bed appearance.
-     */
     private SettingColor dyeToColor(DyeColor dye, int alpha) {
         return switch (dye) {
             case WHITE      -> new SettingColor(255, 255, 255, alpha);
@@ -759,7 +873,17 @@ public class LootLens extends Module {
             shulkerContainers.remove(pos); shulkerCounts.remove(pos);
             if (type == StorageType.CHEST_MINECART) {
                 minecartInventoryChecked.remove(pos);
-                knownStackedMinecarts.remove(pos);
+                knownStackedMinecarts.entrySet().removeIf(e -> {
+                    StackedState s = e.getValue();
+                    if (bposEquals(s.lastBlockPos, pos)) {
+                        if (s.stacked) {
+                            shulkerContainers.remove(pos);
+                            shulkerCounts.remove(pos);
+                        }
+                        return true;
+                    }
+                    return false;
+                });
             }
             return true;
         });
@@ -767,14 +891,27 @@ public class LootLens extends Module {
 
     private void cleanupDistantContainers() {
         if (mc.player == null) return;
-        BlockPos playerPos   = mc.player.getBlockPos();
-        int cleanupRange     = range.get() + (range.get() >> 1);
-        int cleanupRangeSq   = cleanupRange * cleanupRange;
+        BlockPos playerPos = mc.player.getBlockPos();
+        int cleanupRange   = range.get() + (range.get() >> 1);
+        int cleanupRangeSq = cleanupRange * cleanupRange;
+
+        knownStackedMinecarts.entrySet().removeIf(entry -> {
+            StackedState s = entry.getValue();
+            if (s.lastBlockPos == null) return false;
+            if (s.lastBlockPos.getSquaredDistance(playerPos) > cleanupRangeSq) {
+                if (s.stacked) {
+                    shulkerContainers.remove(s.lastBlockPos);
+                    shulkerCounts.remove(s.lastBlockPos);
+                }
+                return true;
+            }
+            return false;
+        });
+
         containers.entrySet().removeIf(entry -> {
             if (entry.getKey().getSquaredDistance(playerPos) <= cleanupRangeSq) return false;
-            // Never clean up a known stacked position
-            if (knownStackedMinecarts.containsKey(entry.getKey())) return false;
             BlockPos pos = entry.getKey();
+            if (knownStackedMinecarts.values().stream().anyMatch(st -> st.stacked && bposEquals(st.lastBlockPos, pos))) return false;
             inventoryCheckedContainers.remove(pos); scannedByScanner.remove(pos);
             shulkerContainers.remove(pos); shulkerCounts.remove(pos);
             minecartInventoryChecked.remove(pos);
@@ -792,20 +929,13 @@ public class LootLens extends Module {
         Set<BlockPos>  renderedDoubleChests = new HashSet<>();
         List<BeamData> beamsToRender        = new ArrayList<>();
 
-        // Item frames are always rendered when scan is enabled — content is visually confirmed on scan.
         renderItemFrames(event, beamsToRender);
-
-        // Render beds (highlight only, no beams)
         if (scanBeds.get()) renderBeds(event);
 
         for (Map.Entry<BlockPos, StorageType> entry : containers.entrySet()) {
             BlockPos    pos  = entry.getKey();
             StorageType type = entry.getValue();
 
-            // Determine whether this entry should be visible:
-            // - Immediate-highlight types → always visible
-            // - Chests/barrels → only after inventory confirm
-            // - Chest minecarts → after inventory confirm OR stacked detection
             boolean shouldRender;
             if (isImmediateHighlight(type)) {
                 shouldRender = true;
@@ -820,11 +950,11 @@ public class LootLens extends Module {
             SettingColor baseColor;
 
             if (type == StorageType.CHEST_MINECART) {
+                boolean isStacked = knownStackedMinecarts.values().stream().anyMatch(st -> st.stacked && bposEquals(st.lastBlockPos, pos));
                 List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(
                     ChestMinecartEntity.class, new Box(pos), entity -> true);
                 if (minecarts.isEmpty()) {
-                    // Keep beam at last known position for stacked groups
-                    if (knownStackedMinecarts.containsKey(pos)) {
+                    if (isStacked) {
                         renderBox = createPaddedBox(pos);
                     } else {
                         toRemove.add(pos); continue;
@@ -832,8 +962,7 @@ public class LootLens extends Module {
                 } else {
                     renderBox = getMinecartChestBox(minecarts.get(0));
                 }
-                // Stacked minecarts use their own distinct color; otherwise use shulkerFoundColor
-                baseColor = knownStackedMinecarts.containsKey(pos)
+                baseColor = isStacked
                     ? stackedMinecartColor.get()
                     : shulkerFoundColor.get();
             } else {
@@ -848,7 +977,6 @@ public class LootLens extends Module {
                 } else {
                     renderBox = createPaddedBox(pos);
                 }
-                // Confirmed chests/barrels use shulkerFoundColor; immediate-highlight types use their own colour
                 baseColor = isImmediateHighlight(type) ? getColor(type) : shulkerFoundColor.get();
             }
 
@@ -1194,7 +1322,6 @@ public class LootLens extends Module {
 
     public int getTotalContainers() { return containers.size(); }
 
-    // ADDED: Public API to allow the HandledScreenMixin to check if it should render the S/D buttons
     public boolean shouldShowStealDumpButtons() {
         return isActive() && stealDumpButtons.get();
     }
@@ -1240,9 +1367,21 @@ public class LootLens extends Module {
 
     private enum StorageType {
         CHEST, TRAPPED_CHEST, BARREL, SHULKER_BOX, ENDER_CHEST, CHEST_MINECART,
-        UTILITY,    // furnaces, blast furnaces, smokers, hoppers, dispensers, droppers
-        DECORATIVE  // brewing stands, crafters, decorated pots
+        UTILITY,
+        DECORATIVE
     }
 
     private record BeamData(Box box, SettingColor color) {}
+
+    /** Mutable per-stack state. */
+    private static final class StackedState {
+        boolean stacked         = false;
+        int     observedCount   = 0;
+        int     confirmedCount  = 0;
+        int     entryDebounce   = 0;
+        int     exitDebounce    = 0;
+        int     missingTicks    = 0;
+        BlockPos lastBlockPos   = null;
+        Vec3d   lastCentroid    = null;
+    }
 }

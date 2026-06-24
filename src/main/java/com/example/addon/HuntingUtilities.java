@@ -10,6 +10,7 @@ import com.example.addon.hud.GatekeeperHUD;
 import com.example.addon.hud.InspectorGadgetHud;
 import com.example.addon.hud.InfoAssistantHud;
 import com.example.addon.hud.LootLensHud;
+import com.example.addon.hud.MotanceHud;
 import com.example.addon.hud.MobanomHUD;
 import com.example.addon.hud.NeighbourhoodWatchHUD;
 import com.example.addon.hud.PortalStockHud;
@@ -94,6 +95,7 @@ public class HuntingUtilities extends MeteorAddon {
         Hud.get().register(InspectorGadgetHud.INFO);
         Hud.get().register(InfoAssistantHud.INFO);
         Hud.get().register(LootLensHud.INFO);
+        Hud.get().register(MotanceHud.INFO);
         Hud.get().register(MobanomHUD.INFO);
         Hud.get().register(NeighbourhoodWatchHUD.INFO);
         Hud.get().register(PortalStockHud.INFO);
