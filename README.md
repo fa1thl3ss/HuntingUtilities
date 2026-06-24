@@ -6,11 +6,14 @@ Currently in **BETA** — expect bugs, incomplete features, and frequent updates
 
 Modules List;
 - Dungeon Assistant
+- Eight To One
 - Elytra Assistant
 - EndSafe
+- Gatekeeper
 - Graveyard
 - Handmold
 - Illushine
+- Inspect Gadget
 - Inventory101
 - Lava Marker
 - Loot Lens
@@ -19,22 +22,25 @@ Modules List;
 - Neighbourhood Watch
 - Pearl Pulse
 - Portal Maker
-- Portal Tracker
 - Rocket Pilot
 - Server Healthcare System
 - Sign Scanner
 - Third Sight
 - Time Throttle
+- Total Disposal
 - Tunnelers
 
 Hud List;
+- Portal Staok
+- Dungeon Assistant
 - Dura Panel
+- Eight To One
+- Gatekeeper
 - Info Assistant
+- Inspector Gadget
 - Loot Lens
 - Mobanom
 - Neighbourhood Watch
-- Portal Stock
-- Portal Tracker
 - Position
 - Rocket Pilot
 - Second Life
