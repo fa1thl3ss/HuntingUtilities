@@ -40,6 +40,7 @@ Hud List;
 - Inspector Gadget
 - Loot Lens
 - Mobanom
+- Motance
 - Neighbourhood Watch
 - Position
 - Rocket Pilot
