@@ -31,7 +31,7 @@ Modules List;
 - Tunnelers
 
 Hud List;
-- Portal Staok
+- Portal Stock
 - Dungeon Assistant
 - Dura Panel
 - Eight To One
