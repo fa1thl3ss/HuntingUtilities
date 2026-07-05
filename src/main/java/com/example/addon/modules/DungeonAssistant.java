@@ -3,7 +3,9 @@ package com.example.addon.modules;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -66,7 +68,7 @@ import net.minecraft.world.chunk.WorldChunk;
 
 public class DungeonAssistant extends Module {
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Enums
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -223,7 +225,6 @@ public class DungeonAssistant extends Module {
         .build()
     );
 
-    // ADDED: Toggleable setting for Steal/Dump buttons
     private final Setting<Boolean> stealDumpButtons = sgGeneral.add(new BoolSetting.Builder()
         .name("steal-dump-buttons")
         .description("Show steal and dump buttons on container screens.")
@@ -342,9 +343,9 @@ public class DungeonAssistant extends Module {
         .visible(trackChestMinecarts::get).build()
     );
 
-    private final Setting<Boolean> trackMisrotatedMinecarts = sgChests.add(new BoolSetting.Builder()
-        .name("track-misrotated-minecarts")
-        .description("Highlights chest minecarts facing diagonal angles instead of cardinal directions.")
+    private final Setting<Boolean> trackAnomalousMinecarts = sgChests.add(new BoolSetting.Builder()
+        .name("minecart-anomalies")
+        .description("Highlights chest minecarts that are physically displaced or facing wrong angles.")
         .defaultValue(true).visible(trackChestMinecarts::get)
         .build()
     );
@@ -352,20 +353,13 @@ public class DungeonAssistant extends Module {
     private final Setting<SettingColor> misrotatedMinecartColor = sgChests.add(new ColorSetting.Builder()
         .name("misrotated-minecart-color").description("Color for misrotated chest minecarts.")
         .defaultValue(new SettingColor(180, 0, 255, 255)) // Purple
-        .visible(() -> trackChestMinecarts.get() && trackMisrotatedMinecarts.get()).build()
-    );
-
-    private final Setting<Boolean> trackDisplacedMinecarts = sgChests.add(new BoolSetting.Builder()
-        .name("track-displaced-minecarts")
-        .description("Highlights chest minecarts that are off-center or not sitting on a rail.")
-        .defaultValue(true).visible(trackChestMinecarts::get)
-        .build()
+        .visible(() -> trackChestMinecarts.get() && trackAnomalousMinecarts.get()).build()
     );
 
     private final Setting<SettingColor> displacedMinecartColor = sgChests.add(new ColorSetting.Builder()
         .name("displaced-minecart-color").description("Color for physically displaced chest minecarts.")
         .defaultValue(new SettingColor(0, 255, 255, 255)) // Cyan
-        .visible(() -> trackChestMinecarts.get() && trackDisplacedMinecarts.get()).build()
+        .visible(() -> trackChestMinecarts.get() && trackAnomalousMinecarts.get()).build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -665,7 +659,6 @@ public class DungeonAssistant extends Module {
             targets.remove(pos);
         }
 
-        // Spawner Torches Rendering
         if (!spawnerTorches.isEmpty() && trackSpawners.get() && highlightSpawnerTorches.get()) {
             SettingColor torchColor = spawnerTorchColor.get();
             for (BlockPos pos : spawnerTorches) {
@@ -724,15 +717,15 @@ public class DungeonAssistant extends Module {
         GlowingRegistry.clear();
         if (renderMode.get() != RenderMode.SPECTRAL) return;
 
-        if (mc.world != null && mc.player != null && (trackChestMinecarts.get() || trackMisrotatedMinecarts.get() || trackDisplacedMinecarts.get())) {
+        if (mc.world != null && mc.player != null && (trackChestMinecarts.get() || trackAnomalousMinecarts.get())) {
             int  blockRange  = range.get() * 16;
             int  worldHeight = mc.world.getHeight();
             Box  searchBox   = new Box(mc.player.getBlockPos()).expand(blockRange, worldHeight, blockRange);
             for (ChestMinecartEntity minecart : mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, e -> true)) {
                 TargetType type = getMinecartType(minecart);
-                if (type == TargetType.DISPLACED_CHEST_MINECART && trackDisplacedMinecarts.get()) {
+                if (type == TargetType.DISPLACED_CHEST_MINECART && trackAnomalousMinecarts.get()) {
                     GlowingRegistry.add(minecart.getId(), toArgb(displacedMinecartColor.get()));
-                } else if (type == TargetType.MISROTATED_CHEST_MINECART && trackMisrotatedMinecarts.get()) {
+                } else if (type == TargetType.MISROTATED_CHEST_MINECART && trackAnomalousMinecarts.get()) {
                     GlowingRegistry.add(minecart.getId(), toArgb(misrotatedMinecartColor.get()));
                 } else if (trackChestMinecarts.get()) {
                     GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
@@ -1084,7 +1077,7 @@ public class DungeonAssistant extends Module {
     }
 
     private boolean runMinecartCheck() {
-        if (!trackChestMinecarts.get() && !trackMisrotatedMinecarts.get() && !trackDisplacedMinecarts.get()) return false;
+        if (!trackChestMinecarts.get() && !trackAnomalousMinecarts.get()) return false;
 
         List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(
             ChestMinecartEntity.class,
@@ -1152,7 +1145,7 @@ public class DungeonAssistant extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Scanning
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void resetScanningState() {
         targets.clear();
@@ -1357,28 +1350,47 @@ public class DungeonAssistant extends Module {
         }
     }
 
-    private TargetType getMinecartType(ChestMinecartEntity minecart) {
-        BlockPos pos = minecart.getBlockPos();
+    private TargetType getMinecartType(ChestMinecartEntity cart) {
+        Vec3d exactPos = cart.getPos();
+        BlockPos blockPos = cart.getBlockPos();
         
-        // 1. Check if physically displaced (Off rail OR off-center from block bounds)
+        // 1. Check if physically displaced (Stuck in a wall OR shifted off the rail center)
         boolean isDisplaced = false;
-        BlockPos belowPos = pos.down();
-        Block belowBlock = mc.world.getBlockState(belowPos).getBlock();
-
-        if (!(belowBlock instanceof AbstractRailBlock)) {
-            isDisplaced = true; // Sitting on ground/air instead of a rail
+        BlockState stateAtPos = mc.world.getBlockState(blockPos);
+        
+        // Check A: Is it clipping into a solid block that isn't a rail? (e.g., generated inside a dungeon wall)
+        if (!stateAtPos.isAir() && stateAtPos.isSolid() && !(stateAtPos.getBlock() instanceof AbstractRailBlock)) {
+            isDisplaced = true;
         } else {
-            // Check if it clipped into a wall and got shifted off the center of the block
-            double offCenterX = Math.abs(minecart.getX() - (pos.getX() + 0.5));
-            double offCenterZ = Math.abs(minecart.getZ() - (pos.getZ() + 0.5));
-            if (offCenterX > 0.3 || offCenterZ > 0.3) {
+            // Check B: Is it significantly offset from the center of the block it's currently inside?
+            double closestCenterX = blockPos.getX() + 0.5;
+            double closestCenterZ = blockPos.getZ() + 0.5;
+            double offsetX = Math.abs(exactPos.x - closestCenterX);
+            double offsetZ = Math.abs(exactPos.z - closestCenterZ);
+            
+            // > 0.1 perfectly ignores vanilla physics bobbing/curves, but catches dungeon generation glitches
+            if (offsetX > 0.1 || offsetZ > 0.1) {
                 isDisplaced = true;
+            }
+            
+            // Check C: Is it floating in the air with no rail nearby?
+            if (!isDisplaced) {
+                boolean hasRail = false;
+                for (int y = 0; y >= -1; y--) {
+                    if (mc.world.getBlockState(blockPos.add(0, y, 0)).getBlock() instanceof AbstractRailBlock) {
+                        hasRail = true;
+                        break;
+                    }
+                }
+                if (!hasRail) {
+                    isDisplaced = true;
+                }
             }
         }
         if (isDisplaced) return TargetType.DISPLACED_CHEST_MINECART;
 
         // 2. Check if rotation is misaligned
-        float yaw = ((minecart.getYaw() % 360) + 360) % 360;
+        float yaw = ((cart.getYaw() % 360) + 360) % 360;
         float remainder = yaw % 90;
         boolean isMisrotated = remainder > 5.0f && remainder < 85.0f;
         if (isMisrotated) return TargetType.MISROTATED_CHEST_MINECART;
@@ -1388,7 +1400,7 @@ public class DungeonAssistant extends Module {
     }
 
     private void scanChestMinecarts() {
-        if (!trackChestMinecarts.get() && !trackMisrotatedMinecarts.get() && !trackDisplacedMinecarts.get()) return;
+        if (!trackChestMinecarts.get() && !trackAnomalousMinecarts.get()) return;
 
         boolean isSpectral  = renderMode.get() == RenderMode.SPECTRAL;
         int     blockRange  = range.get() * 16;
@@ -1401,18 +1413,23 @@ public class DungeonAssistant extends Module {
             currentPositions.add(pos);
 
             TargetType type = getMinecartType(minecart);
+            TargetType targetType = null;
+            int color = 0;
 
-            if (type == TargetType.DISPLACED_CHEST_MINECART && trackDisplacedMinecarts.get()) {
-                targets.put(pos, TargetType.DISPLACED_CHEST_MINECART);
-                if (isSpectral) GlowingRegistry.add(minecart.getId(), toArgb(displacedMinecartColor.get()));
-                else GlowingRegistry.remove(minecart.getId());
-            } else if (type == TargetType.MISROTATED_CHEST_MINECART && trackMisrotatedMinecarts.get()) {
-                targets.put(pos, TargetType.MISROTATED_CHEST_MINECART);
-                if (isSpectral) GlowingRegistry.add(minecart.getId(), toArgb(misrotatedMinecartColor.get()));
-                else GlowingRegistry.remove(minecart.getId());
+            if (type == TargetType.DISPLACED_CHEST_MINECART && trackAnomalousMinecarts.get()) {
+                targetType = TargetType.DISPLACED_CHEST_MINECART;
+                color = toArgb(displacedMinecartColor.get());
+            } else if (type == TargetType.MISROTATED_CHEST_MINECART && trackAnomalousMinecarts.get()) {
+                targetType = TargetType.MISROTATED_CHEST_MINECART;
+                color = toArgb(misrotatedMinecartColor.get());
             } else if (trackChestMinecarts.get()) {
-                targets.put(pos, TargetType.CHEST_MINECART);
-                if (isSpectral) GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
+                targetType = TargetType.CHEST_MINECART;
+                color = toArgb(chestMinecartColor.get());
+            }
+
+            if (targetType != null) {
+                targets.put(pos, targetType);
+                if (isSpectral) GlowingRegistry.add(minecart.getId(), color);
                 else GlowingRegistry.remove(minecart.getId());
             }
         }
@@ -1425,7 +1442,7 @@ public class DungeonAssistant extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Pruning
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
 
     private void pruneBlockTargets() {
         if (mc.world == null || mc.player == null) return;
@@ -1526,9 +1543,9 @@ public class DungeonAssistant extends Module {
             pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════════
     // Color Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════════
 
     private SettingColor withAlpha(SettingColor color, int alpha) {
         return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
@@ -1566,9 +1583,9 @@ public class DungeonAssistant extends Module {
         };
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════════
     // State Reset Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════
 
     private void resetSoftState() {
         wasAutoOpened                  = false;
@@ -1582,9 +1599,9 @@ public class DungeonAssistant extends Module {
         hasPlayedSoundForCurrentScreen = false;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════════
     // Utility Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
 
     private void restoreSlot() {
         if (silentMode.get() && previousSlot >= 0 && mc.player != null) {
@@ -1616,11 +1633,10 @@ public class DungeonAssistant extends Module {
         return (int) Math.max(1, Math.round(baseDelay * (1.0 + (Math.random() - 0.5) * 0.8)));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
     // Public API
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════
 
-    // ADDED: Public API to allow the HandledScreenMixin to check if it should render the S/D buttons
     public boolean shouldShowStealDumpButtons() {
         return isActive() && stealDumpButtons.get();
     }
