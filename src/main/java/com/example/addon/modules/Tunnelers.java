@@ -50,14 +50,6 @@ public class Tunnelers extends Module {
 
     /**
      * Controls how tunnel boxes are visually highlighted.
-     *
-     * GLOW     — layered bloom quads expand outward from each box, using a
-     *            quadratic alpha falloff (bright at the surface, fading fast).
-     *            Respects fade-with-distance.
-     * SPECTRAL — crisp lines-only outline drawn slightly expanded beyond each
-     *            box, mimicking the spectral arrow / vanilla glowing effect.
-     *            Supports an optional alpha pulse and configurable fill alpha.
-     *            Also respects fade-with-distance.
      */
     public enum HighlightStyle {
         GLOW("Glow"),
@@ -83,6 +75,19 @@ public class Tunnelers extends Module {
         Holes,
         LadderShafts,
         Both
+    }
+
+    /** Controls which 1x1 patterns are detected. */
+    public enum Tunnel1x1Mode {
+        Tunnels("Tunnels"),
+        AllFourWalls("All Four Walls"),
+        Both("Both");
+
+        private final String displayName;
+        Tunnel1x1Mode(String name) { this.displayName = name; }
+
+        @Override
+        public String toString() { return displayName; }
     }
 
     // Horizontal-only directions for tunnel BFS connectivity checks.
@@ -205,11 +210,18 @@ public class Tunnelers extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Tunnel1x1Mode> tunnel1x1Mode = sg1x1.add(new EnumSetting.Builder<Tunnel1x1Mode>()
+        .name("1x1-mode")
+        .description("Tunnels: standard 1x1 with 3 walls or 2 opposite walls. All Four Walls: 1x1 room where all 4 cardinal blocks are solid.")
+        .defaultValue(Tunnel1x1Mode.Tunnels)
+        .visible(find1x1::get)
+        .build());
+
     private final Setting<Integer> min1x1Length = sg1x1.add(new IntSetting.Builder()
         .name("min-length")
-        .description("Minimum length of a 1x1 tunnel to be rendered.")
+        .description("Minimum length of a 1x1 tunnel to be rendered (only applies to Tunnels mode).")
         .defaultValue(8).min(1).sliderMax(64)
-        .visible(find1x1::get)
+        .visible(() -> find1x1.get() && (tunnel1x1Mode.get() == Tunnel1x1Mode.Tunnels || tunnel1x1Mode.get() == Tunnel1x1Mode.Both))
         .build());
 
     private final Setting<SettingColor> color1x1 = sg1x1.add(new ColorSetting.Builder()
@@ -426,12 +438,13 @@ public class Tunnelers extends Module {
         final int minLength1x1      = min1x1Length.get();
         final int minLength1x2      = min1x2Length.get();
         final int minLengthAbnormal = minAbnormalLength.get();
+        final Tunnel1x1Mode mode1x1 = tunnel1x1Mode.get();
 
         executor.submit(() -> {
             try {
                 List<MergedBox> merged = buildMergedBoxes(
                     locSnapshot, px, py, pz, maxDistSq,
-                    minLength1x1, minLength1x2, minLengthAbnormal);
+                    minLength1x1, minLength1x2, minLengthAbnormal, mode1x1);
                 renderSnapshot = merged;
             } finally {
                 mergeScheduled.set(false);
@@ -447,7 +460,8 @@ public class Tunnelers extends Module {
             Map<BlockPos, TunnelType> locs,
             int px, int py, int pz,
             double maxDistSq, int minLength1x1,
-            int minLength1x2, int minLengthAbnormal
+            int minLength1x2, int minLengthAbnormal,
+            Tunnel1x1Mode mode1x1
     ) {
         if (locs.isEmpty()) return Collections.emptyList();
 
@@ -465,7 +479,11 @@ public class Tunnelers extends Module {
             coordsByType.get(t).add(new int[]{ p.getX(), p.getY(), p.getZ() });
         }
 
-        filterTunnelTypeByLength(TunnelType.TUNNEL_1x1,      minLength1x1,      coordsByType, remaining);
+        // Only apply length filter to Tunnels mode (not All Four Walls)
+        boolean shouldFilter1x1ByLength = (mode1x1 == Tunnel1x1Mode.Tunnels || mode1x1 == Tunnel1x1Mode.Both);
+        if (shouldFilter1x1ByLength) {
+            filterTunnelTypeByLength(TunnelType.TUNNEL_1x1, minLength1x1, coordsByType, remaining);
+        }
         filterTunnelTypeByLength(TunnelType.TUNNEL_1x2,      minLength1x2,      coordsByType, remaining);
         filterTunnelTypeByLength(TunnelType.ABNORMAL_TUNNEL, minLengthAbnormal, coordsByType, remaining);
 
@@ -494,8 +512,6 @@ public class Tunnelers extends Module {
                         for (int z = oz; z <= z2; z++)
                             rem.remove(pack(x, y, z));
 
-                // Use distance to the nearest point on the box instead of the center.
-                // This prevents lengthy tunnels from vanishing when their center leaves the range.
                 double nearestX = Math.max(ox, Math.min(px, x2));
                 double nearestY = Math.max(oy, Math.min(py, y2));
                 double nearestZ = Math.max(oz, Math.min(pz, z2));
@@ -664,8 +680,14 @@ public class Tunnelers extends Module {
             boolean doHoles   = shaftMode.get() == ShaftMode.Holes   || shaftMode.get() == ShaftMode.Both;
             boolean doLadders = shaftMode.get() == ShaftMode.LadderShafts || shaftMode.get() == ShaftMode.Both;
 
+            Tunnel1x1Mode mode1x1 = tunnel1x1Mode.get();
+            boolean do1x1Tunnels    = (mode1x1 == Tunnel1x1Mode.Tunnels || mode1x1 == Tunnel1x1Mode.Both);
+            boolean do1x1AllFourWalls = (mode1x1 == Tunnel1x1Mode.AllFourWalls || mode1x1 == Tunnel1x1Mode.Both);
+
             ScanConfig config = new ScanConfig(
-                find1x1.get(), find1x2.get(), findAbnormalTunnels.get(), findAbnormalTunnels.get(),
+                find1x1.get() && do1x1Tunnels,
+                find1x1.get() && do1x1AllFourWalls,
+                find1x2.get(), findAbnormalTunnels.get(), findAbnormalTunnels.get(),
                 doHoles, doLadders,
                 minHoleHeight.get(), minLadderHeight.get(),
                 mc.world.getBottomY(), mc.world.getBottomY() + mc.world.getHeight()
@@ -761,7 +783,12 @@ public class Tunnelers extends Module {
             for (int i = 0; i < config.ladderMin; i++)
                 results.put(new BlockPos(wx, wy + i, wz), TunnelType.LADDER_SHAFT);
 
-        if (config.do1x1 && is1x1Tunnel(wx, wy, wz, ctx))
+        // 1x1 Tunnels (standard: 3 walls or 2 opposite walls)
+        if (config.do1x1Tunnels && is1x1Tunnel(wx, wy, wz, ctx))
+            results.put(new BlockPos(wx, wy + 1, wz), TunnelType.TUNNEL_1x1);
+
+        // 1x1 All Four Walls (room-like: all 4 cardinal blocks solid)
+        if (config.do1x1AllFourWalls && is1x1AllFourWalls(wx, wy, wz, ctx))
             results.put(new BlockPos(wx, wy + 1, wz), TunnelType.TUNNEL_1x1);
 
         if (config.do1x2 && is1x2Tunnel(wx, wy, wz, ctx)) {
@@ -819,6 +846,23 @@ public class Tunnelers extends Module {
             return straight && neSolid && nwSolid && seSolid && swSolid;
         }
         return false;
+    }
+
+    /**
+     * Detects a 1x1 space where ALL four cardinal blocks (N, S, E, W) are solid.
+     * This represents a small room or chamber rather than a through-tunnel.
+     */
+    private boolean is1x1AllFourWalls(int x, int y, int z, ScanContext ctx) {
+        // Must have solid floor, air in middle, solid ceiling
+        if (!ctx.isSolid(x, y, z) || !ctx.isAir(x, y + 1, z) || !ctx.isSolid(x, y + 2, z)) return false;
+
+        // All four cardinal directions must be solid at the air level
+        if (!ctx.isSolid(x, y + 1, z - 1)) return false; // North
+        if (!ctx.isSolid(x, y + 1, z + 1)) return false; // South
+        if (!ctx.isSolid(x + 1, y + 1, z)) return false; // East
+        if (!ctx.isSolid(x - 1, y + 1, z)) return false; // West
+
+        return true;
     }
 
     private boolean is1x2Tunnel(int x, int y, int z, ScanContext ctx) {
@@ -956,6 +1000,40 @@ public class Tunnelers extends Module {
     }
 
     // ------------------------------------------------------------------ //
+    //  ScanConfig                                                          //
+    // ------------------------------------------------------------------ //
+
+    private static final class ScanConfig {
+        final boolean do1x1Tunnels;
+        final boolean do1x1AllFourWalls;
+        final boolean do1x2;
+        final boolean do2x2;
+        final boolean doAbnormal;
+        final boolean doHoles;
+        final boolean doLadder;
+        final int holeDepth;
+        final int ladderMin;
+        final int minY;
+        final int maxY;
+
+        ScanConfig(boolean do1x1Tunnels, boolean do1x1AllFourWalls, boolean do1x2,
+                   boolean do2x2, boolean doAbnormal, boolean doHoles, boolean doLadder,
+                   int holeDepth, int ladderMin, int minY, int maxY) {
+            this.do1x1Tunnels = do1x1Tunnels;
+            this.do1x1AllFourWalls = do1x1AllFourWalls;
+            this.do1x2 = do1x2;
+            this.do2x2 = do2x2;
+            this.doAbnormal = doAbnormal;
+            this.doHoles = doHoles;
+            this.doLadder = doLadder;
+            this.holeDepth = holeDepth;
+            this.ladderMin = ladderMin;
+            this.minY = minY;
+            this.maxY = maxY;
+        }
+    }
+
+    // ------------------------------------------------------------------ //
     //  Eviction                                                            //
     // ------------------------------------------------------------------ //
 
@@ -972,7 +1050,7 @@ public class Tunnelers extends Module {
     private void onRender(Render3DEvent event) {
         if (mc.player == null) return;
 
-        List<MergedBox> snapshot = renderSnapshot; // single volatile read
+        List<MergedBox> snapshot = renderSnapshot;
         if (snapshot.isEmpty()) return;
 
         boolean        doFade    = fadeWithDistance.get();
@@ -981,13 +1059,11 @@ public class Tunnelers extends Module {
         ShapeMode      sm        = shapeMode.get();
         HighlightStyle style     = highlightStyle.get();
 
-        // Spectral: sample the pulse multiplier once per frame so all boxes share the same phase.
         double spectralPulseMultiplier = 1.0;
         if (style == HighlightStyle.SPECTRAL && spectralPulse.get()) {
             spectralPulseMultiplier = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(System.currentTimeMillis() / 750.0 * Math.PI));
         }
 
-        // Current player pos for real-time distance reactive fading
         double px = mc.player.getX();
         double py = mc.player.getY();
         double pz = mc.player.getZ();
@@ -1003,17 +1079,15 @@ public class Tunnelers extends Module {
 
             float fadeFrac = 1.0f;
             if (doFade) {
-                // Recalculate distance to nearest point on-the-fly for smooth fading
                 double dx = px < box.x1 ? box.x1 - px : (px > box.x2 ? px - box.x2 : 0);
                 double dy = py < box.y1 ? box.y1 - py : (py > box.y2 ? py - box.y2 : 0);
                 double dz = pz < box.z1 ? box.z1 - pz : (pz > box.z2 ? pz - box.z2 : 0);
                 double currentDistSq = dx*dx + dy*dy + dz*dz;
                 
                 fadeFrac = (float) Math.max(0.0, 1.0 - currentDistSq / maxDistSq);
-                if (fadeFrac <= 0) continue; // Pure optimization: don't render if out of current range
+                if (fadeFrac <= 0) continue;
             }
 
-            // Build the primary faded color used for the solid box fill / lines.
             int fadedA = Math.max(8, (int)(base.a * fadeFrac));
             reusable.r = base.r; reusable.g = base.g; reusable.b = base.b; reusable.a = fadedA;
 
@@ -1102,26 +1176,33 @@ public class Tunnelers extends Module {
     }
 
     // ------------------------------------------------------------------ //
-    //  Data records                                                        //
+    //  MergedBox                                                           //
     // ------------------------------------------------------------------ //
 
-    private record ScanConfig(
-        boolean do1x1, boolean do1x2, boolean do2x2, boolean doAbnormal, boolean doHoles, boolean doLadder,
-        int holeDepth, int ladderMin, int minY, int maxY
-    ) {}
+    private static final class MergedBox {
+        final double x1, y1, z1, x2, y2, z2;
+        final TunnelType type;
+        final double distSq;
+
+        MergedBox(double x1, double y1, double z1, double x2, double y2, double z2,
+                  TunnelType type, double distSq) {
+            this.x1 = x1; this.y1 = y1; this.z1 = z1;
+            this.x2 = x2; this.y2 = y2; this.z2 = z2;
+            this.type = type; this.distSq = distSq;
+        }
+    }
+
+    // ------------------------------------------------------------------ //
+    //  ScanResult                                                          //
+    // ------------------------------------------------------------------ //
 
     private static final class ScanResult {
         final ChunkPos chunkPos;
         final Map<BlockPos, TunnelType> results;
-        ScanResult(ChunkPos cp, Map<BlockPos, TunnelType> r) { chunkPos = cp; results = r; }
-    }
 
-    private static final class MergedBox {
-        final int x1, y1, z1, x2, y2, z2;
-        final TunnelType type;
-        final double distSq;
-        MergedBox(int x1, int y1, int z1, int x2, int y2, int z2, TunnelType t, double d) {
-            this.x1=x1; this.y1=y1; this.z1=z1; this.x2=x2; this.y2=y2; this.z2=z2; type=t; distSq=d;
+        ScanResult(ChunkPos chunkPos, Map<BlockPos, TunnelType> results) {
+            this.chunkPos = chunkPos;
+            this.results = results;
         }
     }
 }

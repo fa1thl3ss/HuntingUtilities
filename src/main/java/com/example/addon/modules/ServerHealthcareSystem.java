@@ -16,31 +16,31 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
-import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.client.gui.screen.DeathScreen;
-import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.block.BedBlock;
 import net.minecraft.block.BlockState;
+import net.minecraft.client.gui.screen.DeathScreen;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.AttributeModifiersComponent;
+import net.minecraft.component.type.FoodComponent;
 import net.minecraft.component.type.ItemEnchantmentsComponent;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.Enchantments;
 import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.item.AxeItem;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.util.Hand;
 import net.minecraft.text.Text;
+import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
@@ -137,8 +137,16 @@ public class ServerHealthcareSystem extends Module {
 
     private final Setting<Boolean> autoEat = sgAutoEat.add(new BoolSetting.Builder()
         .name("auto-eat")
-        .description("Automatically eats Golden Apples when low on health, hunger, or on fire.")
+        .description("Automatically eats food when conditions are met. Always operates silently.")
         .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<EatMode> eatMode = sgAutoEat.add(new EnumSetting.Builder<EatMode>()
+        .name("eat-mode")
+        .description("Emergency eats only Enchanted Golden Apples. Standard Food eats only normal food. Smart mixes both.")
+        .defaultValue(EatMode.Emergency)
+        .visible(autoEat::get)
         .build()
     );
 
@@ -153,14 +161,49 @@ public class ServerHealthcareSystem extends Module {
         .build()
     );
 
-    private final Setting<Integer> hungerLoss = sgAutoEat.add(new IntSetting.Builder()
-        .name("hunger-loss")
-        .description("How many hunger points must be lost before auto-eat triggers (out of 20).")
-        .defaultValue(2)
-        .min(1)
+    private final Setting<Integer> hungerThreshold = sgAutoEat.add(new IntSetting.Builder()
+        .name("hunger-threshold")
+        .description("Eat when hunger drops below this value (out of 20). Set to 0 to disable hunger-based eating.")
+        .defaultValue(18) // 2 hunger bars missing
+        .min(0)
         .max(20)
-        .sliderRange(1, 10)
+        .sliderRange(0, 20)
         .visible(autoEat::get)
+        .build()
+    );
+
+    private final Setting<Boolean> eatOnFire = sgAutoEat.add(new BoolSetting.Builder()
+        .name("eat-on-fire")
+        .description("Eat when on fire and taking damage.")
+        .defaultValue(true)
+        .visible(autoEat::get)
+        .build()
+    );
+
+    private final Setting<Integer> eatCooldown = sgAutoEat.add(new IntSetting.Builder()
+        .name("eat-cooldown")
+        .description("Ticks to wait after eating before eating again.")
+        .defaultValue(20)
+        .min(0)
+        .max(100)
+        .sliderRange(0, 60)
+        .visible(autoEat::get)
+        .build()
+    );
+
+    private final Setting<Boolean> pauseInCombat = sgAutoEat.add(new BoolSetting.Builder()
+        .name("pause-in-combat")
+        .description("Don't eat normal food while taking damage (gapples still work).")
+        .defaultValue(false)
+        .visible(() -> autoEat.get() && eatMode.get() != EatMode.Emergency)
+        .build()
+    );
+
+    private final Setting<Boolean> skipIfRegen = sgAutoEat.add(new BoolSetting.Builder()
+        .name("skip-if-regen")
+        .description("Doesn't eat enchanted golden apples if you already have the regeneration effect.")
+        .defaultValue(true)
+        .visible(() -> autoEat.get() && eatMode.get() != EatMode.StandardFood)
         .build()
     );
 
@@ -193,7 +236,7 @@ public class ServerHealthcareSystem extends Module {
                 if (nearest != null) {
                     bedToBreak = nearest;
                     breakTickCounter = 0;
-                    originalHotbarSlot = mc.player.getInventory().selectedSlot;
+                    bedOriginalHotbarSlot = mc.player.getInventory().selectedSlot;
                     info("Initiating bed breaking at %s...", nearest.toShortString());
                 } else {
                     warning("No bed found nearby to break.");
@@ -208,16 +251,18 @@ public class ServerHealthcareSystem extends Module {
 
     // Auto Eat
     private boolean isEating              = false;
+    private boolean eatStarted            = false;
     private boolean ateForFire            = false;
     private boolean tookDamageWhileOnFire = false;
     private int     eatHotbarSlot         = -1;
+    private int     eatOriginalHotbarSlot = -1;
     private Item    eatTargetItem         = null;
     private int     eatStartupTicks       = 0;
     private int     eatTicksRemaining     = 0;
     private float   lastHealth            = -1;
-
-    // Hunger tracking
-    private int fullHunger = -1;
+    private int     eatCooldownTimer      = 0;
+    private boolean tookDamageRecently    = false;
+    private int     damageTimer           = 0;
 
     // Auto Armor
     private int swapTimer = 0;
@@ -225,7 +270,8 @@ public class ServerHealthcareSystem extends Module {
     // Auto Break Bed
     private BlockPos bedToBreak = null;
     private int breakTickCounter = 0;
-    private int originalHotbarSlot = -1; // Stores the slot before tool swap for bed breaking
+    private int bedOriginalHotbarSlot = -1;
+
     // ── Constructor ───────────────────────────────────────────────────────────
 
     public ServerHealthcareSystem() {
@@ -239,19 +285,16 @@ public class ServerHealthcareSystem extends Module {
     public void onActivate() {
         if (mc.player != null) {
             lastHealth = mc.player.getHealth();
-            fullHunger = mc.player.getHungerManager().getFoodLevel();
         }
         resetState();
-        // No need to reset originalHotbarSlot here, it's handled in onDeactivate
     }
 
     @Override
     public void onDeactivate() {
         stopEating();
         lastHealth = -1;
-        fullHunger = -1;
-        if (originalHotbarSlot != -1) { // Ensure we swap back if module is deactivated mid-break
-            InvUtils.swap(originalHotbarSlot, false);
+        if (bedOriginalHotbarSlot != -1) {
+            InvUtils.swap(bedOriginalHotbarSlot, false);
         }
         resetState();
     }
@@ -260,7 +303,6 @@ public class ServerHealthcareSystem extends Module {
     private void onGameJoined(GameJoinedEvent event) {
         if (mc.player != null) {
             lastHealth = mc.player.getHealth();
-            fullHunger = mc.player.getHungerManager().getFoodLevel();
         }
         resetState();
         if (autoTotem.get()) tickAutoTotem();
@@ -276,35 +318,53 @@ public class ServerHealthcareSystem extends Module {
 
     private void resetState() {
         isEating              = false;
+        eatStarted            = false;
         ateForFire            = false;
         tookDamageWhileOnFire = false;
         eatHotbarSlot         = -1;
-        originalHotbarSlot    = -1;
+        eatOriginalHotbarSlot = -1;
         eatTargetItem         = null;
         eatStartupTicks       = 0;
         eatTicksRemaining     = 0;
+        eatCooldownTimer      = 0;
+        tookDamageRecently    = false;
+        damageTimer           = 0;
         swapTimer             = 0;
+        bedOriginalHotbarSlot = -1;
     }
 
     private void stopEating() {
         mc.options.useKey.setPressed(false);
-        isEating          = false;
-        eatHotbarSlot     = -1;
-        eatTargetItem     = null;
-        eatStartupTicks   = 0;
-        eatTicksRemaining = 0;
+        isEating              = false;
+        eatStarted            = false;
+        eatHotbarSlot         = -1;
+        eatOriginalHotbarSlot = -1;
+        eatTargetItem         = null;
+        eatStartupTicks       = 0;
+        eatTicksRemaining     = 0;
+    }
+
+    private void finishEating() {
+        mc.options.useKey.setPressed(false);
+
+        // Always swap back to original slot
+        if (eatOriginalHotbarSlot != -1 && eatOriginalHotbarSlot != eatHotbarSlot) {
+            InvUtils.swap(eatOriginalHotbarSlot, false);
+        }
+
+        isEating              = false;
+        eatStarted            = false;
+        eatHotbarSlot         = -1;
+        eatOriginalHotbarSlot = -1;
+        eatTargetItem         = null;
+        eatStartupTicks       = 0;
+        eatTicksRemaining     = 0;
+        eatCooldownTimer      = eatCooldown.get();
     }
 
     private void sendUseItemPacket() {
-        if (mc.player == null) return;
-        mc.player.networkHandler.sendPacket(
-            new PlayerInteractItemC2SPacket(
-                Hand.MAIN_HAND,
-                mc.player.currentScreenHandler.getRevision(),
-                mc.player.getYaw(),
-                mc.player.getPitch()
-            )
-        );
+        if (mc.player == null || mc.interactionManager == null) return;
+        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
         mc.player.swingHand(Hand.MAIN_HAND);
     }
 
@@ -316,7 +376,7 @@ public class ServerHealthcareSystem extends Module {
 
         if (swapTimer > 0) swapTimer--;
 
-        tickHealthTracking(); // Always needed for health-based triggers
+        tickHealthTracking();
 
         switch (mode.get()) {
             case Default -> {
@@ -335,6 +395,12 @@ public class ServerHealthcareSystem extends Module {
         if (lastHealth == -1) lastHealth = mc.player.getHealth();
         float health = mc.player.getHealth();
 
+        // Track combat
+        if (health < lastHealth) {
+            tookDamageRecently = true;
+            damageTimer = 40; // 2 seconds of "in combat"
+        }
+
         if (mc.player.isOnFire()) {
             if (health < lastHealth) tookDamageWhileOnFire = true;
         } else {
@@ -343,8 +409,14 @@ public class ServerHealthcareSystem extends Module {
         }
         lastHealth = health;
 
-        int currentHunger = mc.player.getHungerManager().getFoodLevel();
-        if (fullHunger == -1 || currentHunger > fullHunger) fullHunger = currentHunger;
+        // Decrement damage timer
+        if (tookDamageRecently) {
+            damageTimer--;
+            if (damageTimer <= 0) {
+                tookDamageRecently = false;
+                damageTimer = 0;
+            }
+        }
     }
 
     private void tickAutoRespawn() {
@@ -363,9 +435,9 @@ public class ServerHealthcareSystem extends Module {
             if (!(mc.world.getBlockState(bedToBreak).getBlock() instanceof BedBlock)) {
                 info("Bed at %s broken.", bedToBreak.toShortString());
                 bedToBreak = null;
-                if (originalHotbarSlot != -1) {
-                    InvUtils.swap(originalHotbarSlot, false); // Swap back
-                    originalHotbarSlot = -1;
+                if (bedOriginalHotbarSlot != -1) {
+                    InvUtils.swap(bedOriginalHotbarSlot, false);
+                    bedOriginalHotbarSlot = -1;
                 }
                 return;
             }
@@ -374,21 +446,18 @@ public class ServerHealthcareSystem extends Module {
             if (mc.player.getPos().distanceTo(Vec3d.ofCenter(bedToBreak)) > 6.0) {
                 warning("Too far from bed, stopping breaking.");
                 bedToBreak = null;
-                if (originalHotbarSlot != -1) {
-                    InvUtils.swap(originalHotbarSlot, false); // Swap back
-                    originalHotbarSlot = -1;
+                if (bedOriginalHotbarSlot != -1) {
+                    InvUtils.swap(bedOriginalHotbarSlot, false);
+                    bedOriginalHotbarSlot = -1;
                 }
                 return;
             }
 
             int bestToolSlot = findBestTool(bedToBreak);
-            
-            // If a better tool is found and it's not currently selected, swap to it.
-            // If bestToolSlot is -1, it means the bare hand (or current item) is the best, so no swap is needed.
+
             if (bestToolSlot != -1 && mc.player.getInventory().selectedSlot != bestToolSlot) {
-                // Save the original slot only if we are actually swapping to a tool.
-                if (originalHotbarSlot == -1) {
-                    originalHotbarSlot = mc.player.getInventory().selectedSlot;
+                if (bedOriginalHotbarSlot == -1) {
+                    bedOriginalHotbarSlot = mc.player.getInventory().selectedSlot;
                 }
                 InvUtils.swap(bestToolSlot, false);
             }
@@ -399,7 +468,6 @@ public class ServerHealthcareSystem extends Module {
             });
 
             breakTickCounter++;
-            // Optional: Add a timeout if breaking takes too long
         }
     }
 
@@ -458,34 +526,65 @@ public class ServerHealthcareSystem extends Module {
     private void tickAutoEat() {
         if (!autoEat.get()) return;
 
+        // Handle cooldown
+        if (eatCooldownTimer > 0) {
+            eatCooldownTimer--;
+            return;
+        }
+
         if (!isEating) {
+            // Check conditions
             boolean needsHealth = healthThreshold.get() > 0
                 && mc.player.getHealth() <= healthThreshold.get();
-            boolean needsHunger = fullHunger != -1
-                && (fullHunger - mc.player.getHungerManager().getFoodLevel()) >= hungerLoss.get();
-            boolean needsFireEat = mc.player.isOnFire() && tookDamageWhileOnFire && !ateForFire;
+            boolean needsHunger = hungerThreshold.get() > 0
+                && mc.player.getHungerManager().getFoodLevel() <= hungerThreshold.get();
+            boolean needsFireEat = eatOnFire.get()
+                && mc.player.isOnFire() && tookDamageWhileOnFire && !ateForFire;
+
+            // Determine if this is an emergency (requires egaps in Smart mode)
+            boolean isEmergency = needsHealth || needsFireEat;
+
+            // Don't eat normal food in combat if setting enabled
+            if (pauseInCombat.get() && tookDamageRecently && !isEmergency) {
+                return;
+            }
 
             if (!needsHealth && !needsHunger && !needsFireEat) return;
 
-            int gappleSlot = findBestGapple();
-            if (gappleSlot == -1) return;
+            int foodSlot = findBestFood(isEmergency);
+            if (foodSlot == -1) return;
 
-            eatTargetItem = mc.player.getInventory().getStack(gappleSlot).getItem();
+            ItemStack foodStack = mc.player.getInventory().getStack(foodSlot);
+            eatTargetItem = foodStack.getItem();
 
-            if (gappleSlot < 9) {
-                eatHotbarSlot = gappleSlot;
-            } else {
-                eatHotbarSlot = mc.player.getInventory().selectedSlot;
-                InvUtils.move().from(gappleSlot).toHotbar(eatHotbarSlot);
+            // Cancel if we already have regeneration and the toggle is on
+            if (skipIfRegen.get() && foodStack.isOf(Items.ENCHANTED_GOLDEN_APPLE)) {
+                if (mc.player.hasStatusEffect(StatusEffects.REGENERATION)) {
+                    return;
+                }
             }
-            mc.player.getInventory().selectedSlot = eatHotbarSlot;
 
-            eatStartupTicks   = 3;
-            eatTicksRemaining = 32;
+            // Save original slot for swap back
+            eatOriginalHotbarSlot = mc.player.getInventory().selectedSlot;
 
-            mc.options.useKey.setPressed(true);
-            sendUseItemPacket();
+            if (foodSlot < 9) {
+                eatHotbarSlot = foodSlot;
+                mc.player.getInventory().selectedSlot = eatHotbarSlot;
+                InvUtils.swap(eatHotbarSlot, false); // Sync with server
+                eatStartupTicks = 2; // Wait 2 ticks for server to process slot change
+            } else {
+                eatHotbarSlot = findEmptyHotbarSlot();
+                if (eatHotbarSlot == -1) eatHotbarSlot = eatOriginalHotbarSlot;
+                InvUtils.move().from(foodSlot).toHotbar(eatHotbarSlot);
+                mc.player.getInventory().selectedSlot = eatHotbarSlot;
+                InvUtils.swap(eatHotbarSlot, false); // Sync with server
+                eatStartupTicks = 4; // Wait 4 ticks for inventory move to sync
+            }
+
+            // Calculate actual eat duration from item
+            eatTicksRemaining = eatTargetItem.getMaxUseTime(foodStack, mc.player);
             isEating = true;
+            eatStarted = false;
 
             if (needsFireEat) {
                 ateForFire            = true;
@@ -493,30 +592,46 @@ public class ServerHealthcareSystem extends Module {
             }
 
         } else {
+            // Eating in progress
             if (eatStartupTicks > 0) {
                 eatStartupTicks--;
+                // Ensure slot stays selected locally
                 mc.player.getInventory().selectedSlot = eatHotbarSlot;
-                mc.options.useKey.setPressed(true);
-                if (eatTicksRemaining > 0) eatTicksRemaining--;
-                return;
+                return; // Wait for server sync
             }
 
-            ItemStack hotbarStack    = mc.player.getInventory().getStack(eatHotbarSlot);
-            boolean hotbarHasGapple  = eatTargetItem != null && hotbarStack.isOf(eatTargetItem);
-            ItemStack activeItem     = mc.player.getActiveItem();
-            boolean activeIsGapple   = activeItem.isOf(Items.GOLDEN_APPLE)
-                || activeItem.isOf(Items.ENCHANTED_GOLDEN_APPLE);
-
-            if (!hotbarHasGapple && !activeIsGapple) { stopEating(); return; }
-
+            // Force slot to stay selected
             mc.player.getInventory().selectedSlot = eatHotbarSlot;
-            mc.options.useKey.setPressed(true);
 
-            if (mc.currentScreen != null) {
-                if (eatTicksRemaining > 0) eatTicksRemaining--;
-                else stopEating();
-            } else if (!mc.player.isUsingItem()) {
-                stopEating();
+            if (!eatStarted) {
+                // Sync complete, send the start eating packet directly to server
+                sendUseItemPacket();
+                eatStarted = true;
+            }
+
+            if (eatTicksRemaining > 0) {
+                eatTicksRemaining--;
+                
+                // Safety check: If the item disappears, stop trying to eat
+                ItemStack hotbarStack = mc.player.getInventory().getStack(eatHotbarSlot);
+                if (!hotbarStack.isOf(eatTargetItem)) {
+                    finishEating();
+                }
+            } else {
+                finishEating();
+            }
+        }
+    }
+
+    // ── Packet Handlers ───────────────────────────────────────────────────────
+
+    @EventHandler
+    private void onPacketSend(PacketEvent.Send event) {
+        // Intercept and cancel the "stop eating" packet while auto-eating.
+        // This prevents opening inventories/chats from canceling our silent eat.
+        if (event.packet instanceof PlayerActionC2SPacket packet) {
+            if (packet.getAction() == PlayerActionC2SPacket.Action.RELEASE_USE_ITEM && isEating) {
+                event.cancel();
             }
         }
     }
@@ -543,18 +658,106 @@ public class ServerHealthcareSystem extends Module {
         this.toggle();
     }
 
+    private boolean isEdible(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return false;
+        return stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)
+            || stack.get(DataComponentTypes.FOOD) != null;
+    }
+
+    private int findEmptyHotbarSlot() {
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getStack(i).isEmpty()) return i;
+        }
+        return -1;
+    }
+
+    private int findBestFood(boolean emergency) {
+        EatMode mode = eatMode.get();
+
+        if (mode == EatMode.Emergency) {
+            return findBestEgapple();
+        }
+
+        if (mode == EatMode.StandardFood) {
+            return findBestNormalFood();
+        }
+
+        // Smart mode: egapples for emergency, normal food otherwise
+        if (emergency) {
+            int egapple = findBestEgapple();
+            if (egapple != -1) return egapple;
+        }
+        return findBestNormalFood();
+    }
+
+    private int findBestNormalFood() {
+        int bestSlot = -1;
+        int bestValue = -1;
+
+        int hotbarBest = -1;
+        int hotbarBestValue = -1;
+
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (stack.isEmpty()) continue;
+
+            FoodComponent food = stack.get(DataComponentTypes.FOOD);
+            if (food == null) continue;
+
+            // Calculate food value (hunger + saturation bonus)
+            int value = (int) (food.nutrition() + food.saturation() * 10);
+
+            // Prefer stackable food to preserve rare items
+            if (stack.getMaxCount() > 1) value += 100;
+
+            if (i < 9) {
+                if (value > hotbarBestValue) {
+                    hotbarBestValue = value;
+                    hotbarBest = i;
+                }
+            } else {
+                if (value > bestValue) {
+                    bestValue = value;
+                    bestSlot = i;
+                }
+            }
+        }
+
+        return hotbarBest != -1 ? hotbarBest : bestSlot;
+    }
+
+    private int findBestEgapple() {
+        int hotbarEgapple = -1;
+        int inventoryEgapple = -1;
+
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (stack.isEmpty()) continue;
+
+            if (stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)) {
+                if (i < 9) {
+                    if (hotbarEgapple == -1) hotbarEgapple = i;
+                } else {
+                    if (inventoryEgapple == -1) inventoryEgapple = i;
+                }
+            }
+        }
+
+        // Always prefer hotbar over inventory for faster access
+        if (hotbarEgapple != -1) return hotbarEgapple;
+        return inventoryEgapple;
+    }
+
     private void handleChestplateElytraSwitch() {
         if (Modules.get().get(RocketPilot.class).isActive()) return;
 
         ItemStack chest = mc.player.getEquippedStack(EquipmentSlot.CHEST);
         if (mc.player.isOnGround()) {
-            // If on ground, we want a chestplate. If we have an elytra, swap it.
             if (chest.isOf(Items.ELYTRA)) {
                 FindItemResult cp = findBestChestplate();
                 if (cp.found()) { InvUtils.move().from(cp.slot()).toArmor(2); swapTimer = swapDelay.get(); }
             }
         } else {
-            // If in air, we want an elytra. If we don't have one, swap to it.
             if (!chest.isOf(Items.ELYTRA)) {
                 FindItemResult elytra = InvUtils.find(Items.ELYTRA);
                 if (elytra.found()) { InvUtils.move().from(elytra.slot()).toArmor(2); swapTimer = swapDelay.get(); }
@@ -626,29 +829,6 @@ public class ServerHealthcareSystem extends Module {
         return count;
     }
 
-    private int findBestGapple() {
-        int hotbarGapple     = -1;
-        int inventoryEgapple = -1;
-        int inventoryGapple  = -1;
-
-        for (int i = 0; i < 36; i++) {
-            ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-
-            if (stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)) {
-                if (i < 9) return i;
-                if (inventoryEgapple == -1) inventoryEgapple = i;
-            } else if (stack.isOf(Items.GOLDEN_APPLE)) {
-                if (i < 9) { if (hotbarGapple == -1) hotbarGapple = i; }
-                else        { if (inventoryGapple == -1) inventoryGapple = i; }
-            }
-        }
-
-        if (hotbarGapple     != -1) return hotbarGapple;
-        if (inventoryEgapple != -1) return inventoryEgapple;
-        return inventoryGapple;
-    }
-
     private int getEnchantmentLevel(ItemStack stack, String id) {
         ItemEnchantmentsComponent enchants = stack.get(DataComponentTypes.ENCHANTMENTS);
         if (enchants == null) return 0;
@@ -666,7 +846,6 @@ public class ServerHealthcareSystem extends Module {
         double minDistanceSq = Double.MAX_VALUE;
         BlockPos nearestBed = null;
 
-        // Search in a 5x5x5 cube around the player
         for (int x = -5; x <= 5; x++) {
             for (int y = -5; y <= 5; y++) {
                 for (int z = -5; z <= 5; z++) {
@@ -688,10 +867,10 @@ public class ServerHealthcareSystem extends Module {
         if (mc.player == null || mc.world == null) return -1;
 
         BlockState state = mc.world.getBlockState(blockPos);
-        float bestSpeed = 1.0f; // Default speed for bare hand
+        float bestSpeed = 1.0f;
         int bestSlot = -1;
 
-        for (int i = 0; i < 9; i++) { // Iterate hotbar
+        for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (stack.isEmpty()) continue;
 
@@ -700,6 +879,7 @@ public class ServerHealthcareSystem extends Module {
         }
         return bestSlot;
     }
+
     // ── Enums ─────────────────────────────────────────────────────────────────
 
     public enum OperationMode {
@@ -711,5 +891,17 @@ public class ServerHealthcareSystem extends Module {
         Chestplate,
         Elytra,
         Smart
+    }
+
+    public enum EatMode {
+        Emergency,
+        StandardFood,
+        Smart;
+
+        @Override
+        public String toString() {
+            if (this == StandardFood) return "Standard Food";
+            return name();
+        }
     }
 }

@@ -153,22 +153,28 @@ public class EightToOne extends Module {
         .name("beam-style").defaultValue(BeamStyle.GUARDIAN).visible(showBeam::get).build());
 
     private final Setting<Integer> beamWidth = sgBeam.add(new IntSetting.Builder()
-        .name("beam-width").defaultValue(15).visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.BOX).build());
+        .name("beam-width").defaultValue(15).min(1).sliderMax(100)
+        .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.BOX).build());
 
     private final Setting<Double> guardianRadius = sgBeam.add(new DoubleSetting.Builder()
-        .name("guardian-radius").defaultValue(0.08).visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
+        .name("guardian-radius").defaultValue(0.08).min(0.01).sliderMax(1.0)
+        .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
 
     private final Setting<Integer> guardianStrands = sgBeam.add(new IntSetting.Builder()
-        .name("guardian-strands").defaultValue(4).visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
+        .name("guardian-strands").defaultValue(4).min(1).sliderMax(16)
+        .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
 
     private final Setting<Double> guardianSpinSpeed = sgBeam.add(new DoubleSetting.Builder()
-        .name("guardian-spin-speed").defaultValue(1.0).visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
+        .name("guardian-spin-speed").defaultValue(1.0).min(0.1).sliderMax(5.0)
+        .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
 
     private final Setting<Integer> guardianCoreAlpha = sgBeam.add(new IntSetting.Builder()
-        .name("guardian-core-alpha").defaultValue(90).visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
+        .name("guardian-core-alpha").defaultValue(90).min(4).sliderMax(255)
+        .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
 
     private final Setting<Integer> guardianStrandAlpha = sgBeam.add(new IntSetting.Builder()
-        .name("guardian-strand-alpha").defaultValue(160).visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
+        .name("guardian-strand-alpha").defaultValue(160).min(4).sliderMax(255)
+        .visible(() -> showBeam.get() && beamStyle.get() == BeamStyle.GUARDIAN).build());
 
     // ── State ──────────────────────────────────────────────────────
     private final Map<BlockPos, PortalType> portals = new ConcurrentHashMap<>();
@@ -406,8 +412,15 @@ public class EightToOne extends Module {
         BlockPos[] corners = (minX == maxX) 
             ? new BlockPos[]{new BlockPos(minX, minY-1, minZ-1), new BlockPos(minX, minY-1, maxZ+1), new BlockPos(minX, maxY+1, minZ-1), new BlockPos(minX, maxY+1, maxZ+1)}
             : new BlockPos[]{new BlockPos(minX-1, minY-1, minZ), new BlockPos(maxX+1, minY-1, minZ), new BlockPos(minX-1, maxY+1, minZ), new BlockPos(maxX+1, maxY+1, minZ)};
-        for (BlockPos c : corners) if (!mc.world.getBlockState(c).isOf(Blocks.OBSIDIAN)) return false;
+        for (BlockPos c : corners) {
+            // FIX: Check if chunk is loaded before accessing block state
+            if (!isChunkLoaded(c) || !mc.world.getBlockState(c).isOf(Blocks.OBSIDIAN)) return false;
+        }
         return true;
+    }
+
+    private boolean isChunkLoaded(BlockPos pos) {
+        return mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4);
     }
 
     private BlockPos componentAnchor(Set<BlockPos> comp) {
@@ -419,7 +432,17 @@ public class EightToOne extends Module {
     private void cleanupDistantPortals() {
         if (mc.player == null) return;
         double distSq = Math.pow(range.get() * 16 + 64, 2);
-        if (portals.entrySet().removeIf(e -> e.getKey().getSquaredDistance(mc.player.getPos()) > distSq)) portalsDirty = true;
+        boolean removed = false;
+        if (portals.entrySet().removeIf(e -> e.getKey().getSquaredDistance(mc.player.getPos()) > distSq)) {
+            portalsDirty = true;
+            removed = true;
+        }
+
+        // FIX: Immediately remove stale structures to prevent rendering unloaded chunks
+        if (removed) {
+            portalStructureMap.entrySet().removeIf(e -> 
+                e.getValue().boundingBox.getCenter().squaredDistanceTo(mc.player.getPos()) > distSq);
+        }
 
         int px = mc.player.getBlockPos().getX() >> 4, pz = mc.player.getBlockPos().getZ() >> 4;
         int rSq = range.get() * range.get();
@@ -452,6 +475,10 @@ public class EightToOne extends Module {
         }
 
         for (PortalStructure structure : portalStructureMap.values()) {
+            // FIX: Skip rendering if the chunk containing the portal center is unloaded
+            BlockPos center = BlockPos.ofFloored(structure.boundingBox.getCenter());
+            if (!isChunkLoaded(center)) continue;
+
             SettingColor color = getStructureColor(structure);
             if (color == null) continue;
             if (highlightStyle.get() == HighlightStyle.SPECTRAL) renderSpectral(event, structure, color);
@@ -473,8 +500,11 @@ public class EightToOne extends Module {
         for (BlockPos p : structure.portalBlocks) {
             for (Direction d : Direction.values()) {
                 BlockPos n = p.offset(d);
-                if (!structure.portalBlocks.contains(n) && mc.world.getBlockState(n).isOf(Blocks.OBSIDIAN)) {
-                    Box nb = new Box(n); frameBox = (frameBox == null) ? nb : frameBox.union(nb);
+                if (!structure.portalBlocks.contains(n)) {
+                    // FIX: Check if chunk is loaded before accessing block state
+                    if (isChunkLoaded(n) && mc.world.getBlockState(n).isOf(Blocks.OBSIDIAN)) {
+                        Box nb = new Box(n); frameBox = (frameBox == null) ? nb : frameBox.union(nb);
+                    }
                 }
             }
         }
@@ -510,7 +540,9 @@ public class EightToOne extends Module {
     }
 
     private void renderBoxBeam(Render3DEvent event, Box anchorBox, SettingColor color) {
-        double beamSize = beamWidth.get() / 100.0, centerX = (anchorBox.minX + anchorBox.maxX) / 2.0, centerZ = (anchorBox.minZ + anchorBox.maxZ) / 2.0;
+        double beamSize = Math.max(0.01, beamWidth.get() / 100.0);  // FIX: Clamp to minimum
+        double centerX = (anchorBox.minX + anchorBox.maxX) / 2.0;
+        double centerZ = (anchorBox.minZ + anchorBox.maxZ) / 2.0;
         int worldBot = mc.world.getBottomY(), worldTop = worldBot + mc.world.getHeight();
         Box beamBox = new Box(centerX - beamSize, worldBot, centerZ - beamSize, centerX + beamSize, worldTop, centerZ + beamSize);
         renderGlowLayers(event, beamBox, color);
@@ -520,7 +552,8 @@ public class EightToOne extends Module {
     private void renderGuardianBeam(Render3DEvent event, Box anchorBox, SettingColor color) {
         double cx = (anchorBox.minX + anchorBox.maxX) / 2.0, cz = (anchorBox.minZ + anchorBox.maxZ) / 2.0;
         int worldBot = mc.world.getBottomY(), worldTop = worldBot + mc.world.getHeight();
-        double radius = guardianRadius.get(), rotationRad = (System.currentTimeMillis() % 6000L) / 6000.0 * Math.PI * 2.0;
+        double radius = Math.max(0.01, guardianRadius.get());  // FIX: Clamp to minimum
+        double rotationRad = (System.currentTimeMillis() % 6000L) / 6000.0 * Math.PI * 2.0 * guardianSpinSpeed.get();
         for (int i = 0; i < guardianStrands.get(); i++) {
             double angle = rotationRad + (Math.PI * 2.0 / guardianStrands.get()) * i;
             Box strandBox = new Box(cx + Math.cos(angle) * radius - 0.01, worldBot, cz + Math.sin(angle) * radius - 0.01, cx + Math.cos(angle) * radius + 0.01, worldTop, cz + Math.sin(angle) * radius + 0.01);
@@ -530,16 +563,21 @@ public class EightToOne extends Module {
 
     private SettingColor getStructureColor(PortalStructure structure) {
         if (structure.type == PortalType.RESPAWN_ANCHOR) {
-            boolean charged = anchorChargeMap.getOrDefault(structure.portalBlocks.iterator().next(), false);
+            // FIX: Safe iteration over portalBlocks
+            boolean charged = false;
+            for (BlockPos p : structure.portalBlocks) {
+                charged = anchorChargeMap.getOrDefault(p, false);
+                break;
+            }
             if (dynamicColors.get()) {
-                float hue = ( (charged ? 0.13f : 0.65f) + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
+                float hue = ((charged ? 0.13f : 0.65f) + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
                 int rgb = java.awt.Color.HSBtoRGB(hue, 0.8f, 1.0f);
                 return new SettingColor((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, 255);
             }
             return charged ? anchorChargedColor.get() : anchorUnchargedColor.get();
         }
         if (dynamicColors.get()) {
-            float hue = ( (structure.isFullSize() ? 0.78f : 0.08f) + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
+            float hue = ((structure.isFullSize() ? 0.78f : 0.08f) + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
             int rgb = java.awt.Color.HSBtoRGB(hue, 0.8f, 1.0f);
             return new SettingColor((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, 255);
         }

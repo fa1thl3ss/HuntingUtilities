@@ -3,9 +3,7 @@ package com.example.addon.modules;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,6 +31,7 @@ import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -75,6 +74,8 @@ public class DungeonAssistant extends Module {
         SPAWNER,
         CHEST,
         CHEST_MINECART,
+        MISROTATED_CHEST_MINECART,
+        DISPLACED_CHEST_MINECART,
         CUSTOM_BLOCK,
         MISROTATED_DEEPSLATE,
         LOW_Y_STONE_DIRT
@@ -167,6 +168,21 @@ public class DungeonAssistant extends Module {
     private final Setting<Integer> maxYSetting = sgGeneral.add(new IntSetting.Builder()
         .name("max-y").description("Maximum Y-level to scan.")
         .defaultValue(320).min(-64).max(320).sliderMin(-64).sliderMax(320)
+        .build()
+    );
+
+    private final Setting<Boolean> showDungeonsY = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-dungeons-y")
+        .description("Restricts scanning to a maximum Y level (filters out surface clutter).")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Integer> dungeonYLevel = sgGeneral.add(new IntSetting.Builder()
+        .name("dungeon-y-level")
+        .description("The maximum Y level to scan when Show Dungeons Y is active.")
+        .defaultValue(100).min(-64).max(320).sliderMin(-64).sliderMax(320)
+        .visible(showDungeonsY::get)
         .build()
     );
 
@@ -324,6 +340,32 @@ public class DungeonAssistant extends Module {
         .name("chest-minecart-color").description("Chest minecart highlight color.")
         .defaultValue(new SettingColor(255, 180, 0, 255))
         .visible(trackChestMinecarts::get).build()
+    );
+
+    private final Setting<Boolean> trackMisrotatedMinecarts = sgChests.add(new BoolSetting.Builder()
+        .name("track-misrotated-minecarts")
+        .description("Highlights chest minecarts facing diagonal angles instead of cardinal directions.")
+        .defaultValue(true).visible(trackChestMinecarts::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> misrotatedMinecartColor = sgChests.add(new ColorSetting.Builder()
+        .name("misrotated-minecart-color").description("Color for misrotated chest minecarts.")
+        .defaultValue(new SettingColor(180, 0, 255, 255)) // Purple
+        .visible(() -> trackChestMinecarts.get() && trackMisrotatedMinecarts.get()).build()
+    );
+
+    private final Setting<Boolean> trackDisplacedMinecarts = sgChests.add(new BoolSetting.Builder()
+        .name("track-displaced-minecarts")
+        .description("Highlights chest minecarts that are off-center or not sitting on a rail.")
+        .defaultValue(true).visible(trackChestMinecarts::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> displacedMinecartColor = sgChests.add(new ColorSetting.Builder()
+        .name("displaced-minecart-color").description("Color for physically displaced chest minecarts.")
+        .defaultValue(new SettingColor(0, 255, 255, 255)) // Cyan
+        .visible(() -> trackChestMinecarts.get() && trackDisplacedMinecarts.get()).build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -580,17 +622,20 @@ public class DungeonAssistant extends Module {
         for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
             BlockPos   pos  = entry.getKey();
             TargetType type = entry.getValue();
+
+            if (showDungeonsY.get() && pos.getY() > dungeonYLevel.get()) continue;
+
             Box renderBox;
             SettingColor color;
 
-            if (type == TargetType.CHEST_MINECART) {
+            if (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) {
                 Box queryBox = new Box(pos).expand(0.5);
                 List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(
                     ChestMinecartEntity.class, queryBox, entity -> true);
                 if (minecarts.isEmpty()) { toRemove.add(pos); continue; }
 
                 renderBox = getMinecartChestBox(minecarts.get(0));
-                color = chestMinecartColor.get();
+                color = getColor(type);
 
             } else {
                 if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
@@ -608,7 +653,7 @@ public class DungeonAssistant extends Module {
             if (color == null) continue;
 
             if (isSpectral) {
-                int fillAlpha = (type == TargetType.CHEST_MINECART) ? 0 : spectralBlockFillAlpha.get();
+                int fillAlpha = (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) ? 0 : spectralBlockFillAlpha.get();
                 event.renderer.box(renderBox, withAlpha(color, fillAlpha), withAlpha(color, 0), ShapeMode.Sides, 0);
             } else {
                 renderGlowLayers(event, renderBox, color);
@@ -679,12 +724,19 @@ public class DungeonAssistant extends Module {
         GlowingRegistry.clear();
         if (renderMode.get() != RenderMode.SPECTRAL) return;
 
-        if (mc.world != null && mc.player != null && trackChestMinecarts.get()) {
+        if (mc.world != null && mc.player != null && (trackChestMinecarts.get() || trackMisrotatedMinecarts.get() || trackDisplacedMinecarts.get())) {
             int  blockRange  = range.get() * 16;
             int  worldHeight = mc.world.getHeight();
             Box  searchBox   = new Box(mc.player.getBlockPos()).expand(blockRange, worldHeight, blockRange);
             for (ChestMinecartEntity minecart : mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, e -> true)) {
-                GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
+                TargetType type = getMinecartType(minecart);
+                if (type == TargetType.DISPLACED_CHEST_MINECART && trackDisplacedMinecarts.get()) {
+                    GlowingRegistry.add(minecart.getId(), toArgb(displacedMinecartColor.get()));
+                } else if (type == TargetType.MISROTATED_CHEST_MINECART && trackMisrotatedMinecarts.get()) {
+                    GlowingRegistry.add(minecart.getId(), toArgb(misrotatedMinecartColor.get()));
+                } else if (trackChestMinecarts.get()) {
+                    GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
+                }
             }
         }
 
@@ -1032,7 +1084,7 @@ public class DungeonAssistant extends Module {
     }
 
     private boolean runMinecartCheck() {
-        if (!trackChestMinecarts.get()) return false;
+        if (!trackChestMinecarts.get() && !trackMisrotatedMinecarts.get() && !trackDisplacedMinecarts.get()) return false;
 
         List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(
             ChestMinecartEntity.class,
@@ -1247,7 +1299,7 @@ public class DungeonAssistant extends Module {
         if (!doCustomBlocks && !doMisrotated && !doLowY) return;
 
         int          minY     = minYSetting.get();
-        int          maxY     = maxYSetting.get();
+        int          maxY     = showDungeonsY.get() ? dungeonYLevel.get() : maxYSetting.get();
         List<Block>  filter   = doCustomBlocks ? filterBlocks.get() : List.of();
         ChunkSection[] sections = chunk.getSectionArray();
 
@@ -1289,8 +1341,13 @@ public class DungeonAssistant extends Module {
     }
 
     private void scanBlockEntitiesInChunk(WorldChunk chunk) {
+        int minY = minYSetting.get();
+        int maxY = showDungeonsY.get() ? dungeonYLevel.get() : maxYSetting.get();
+
         for (BlockEntity be : chunk.getBlockEntities().values()) {
             BlockPos pos = be.getPos();
+            if (pos.getY() < minY || pos.getY() > maxY) continue;
+
             if ((trackSpawners.get() || autoBreakSpawners.get()) && be instanceof MobSpawnerBlockEntity) {
                 targets.put(pos, TargetType.SPAWNER);
             } else if (trackChests.get()) {
@@ -1300,8 +1357,38 @@ public class DungeonAssistant extends Module {
         }
     }
 
+    private TargetType getMinecartType(ChestMinecartEntity minecart) {
+        BlockPos pos = minecart.getBlockPos();
+        
+        // 1. Check if physically displaced (Off rail OR off-center from block bounds)
+        boolean isDisplaced = false;
+        BlockPos belowPos = pos.down();
+        Block belowBlock = mc.world.getBlockState(belowPos).getBlock();
+
+        if (!(belowBlock instanceof AbstractRailBlock)) {
+            isDisplaced = true; // Sitting on ground/air instead of a rail
+        } else {
+            // Check if it clipped into a wall and got shifted off the center of the block
+            double offCenterX = Math.abs(minecart.getX() - (pos.getX() + 0.5));
+            double offCenterZ = Math.abs(minecart.getZ() - (pos.getZ() + 0.5));
+            if (offCenterX > 0.3 || offCenterZ > 0.3) {
+                isDisplaced = true;
+            }
+        }
+        if (isDisplaced) return TargetType.DISPLACED_CHEST_MINECART;
+
+        // 2. Check if rotation is misaligned
+        float yaw = ((minecart.getYaw() % 360) + 360) % 360;
+        float remainder = yaw % 90;
+        boolean isMisrotated = remainder > 5.0f && remainder < 85.0f;
+        if (isMisrotated) return TargetType.MISROTATED_CHEST_MINECART;
+
+        // 3. Fallback to normal
+        return TargetType.CHEST_MINECART;
+    }
+
     private void scanChestMinecarts() {
-        if (!trackChestMinecarts.get()) return;
+        if (!trackChestMinecarts.get() && !trackMisrotatedMinecarts.get() && !trackDisplacedMinecarts.get()) return;
 
         boolean isSpectral  = renderMode.get() == RenderMode.SPECTRAL;
         int     blockRange  = range.get() * 16;
@@ -1312,17 +1399,27 @@ public class DungeonAssistant extends Module {
         for (ChestMinecartEntity minecart : mc.world.getEntitiesByClass(ChestMinecartEntity.class, searchBox, entity -> true)) {
             BlockPos pos = minecart.getBlockPos();
             currentPositions.add(pos);
-            targets.put(pos, TargetType.CHEST_MINECART);
 
-            if (isSpectral) {
-                GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
-            } else {
-                GlowingRegistry.remove(minecart.getId());
+            TargetType type = getMinecartType(minecart);
+
+            if (type == TargetType.DISPLACED_CHEST_MINECART && trackDisplacedMinecarts.get()) {
+                targets.put(pos, TargetType.DISPLACED_CHEST_MINECART);
+                if (isSpectral) GlowingRegistry.add(minecart.getId(), toArgb(displacedMinecartColor.get()));
+                else GlowingRegistry.remove(minecart.getId());
+            } else if (type == TargetType.MISROTATED_CHEST_MINECART && trackMisrotatedMinecarts.get()) {
+                targets.put(pos, TargetType.MISROTATED_CHEST_MINECART);
+                if (isSpectral) GlowingRegistry.add(minecart.getId(), toArgb(misrotatedMinecartColor.get()));
+                else GlowingRegistry.remove(minecart.getId());
+            } else if (trackChestMinecarts.get()) {
+                targets.put(pos, TargetType.CHEST_MINECART);
+                if (isSpectral) GlowingRegistry.add(minecart.getId(), toArgb(chestMinecartColor.get()));
+                else GlowingRegistry.remove(minecart.getId());
             }
         }
 
         targets.entrySet().removeIf(entry ->
-            entry.getValue() == TargetType.CHEST_MINECART && !currentPositions.contains(entry.getKey())
+            (entry.getValue() == TargetType.CHEST_MINECART || entry.getValue() == TargetType.MISROTATED_CHEST_MINECART || entry.getValue() == TargetType.DISPLACED_CHEST_MINECART) 
+            && !currentPositions.contains(entry.getKey())
         );
     }
 
@@ -1338,7 +1435,7 @@ public class DungeonAssistant extends Module {
 
         for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
             TargetType type = entry.getValue();
-            if (type == TargetType.CHEST_MINECART) continue;
+            if (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) continue;
 
             BlockPos pos = entry.getKey();
             int chunkX = pos.getX() >> 4;
@@ -1449,7 +1546,7 @@ public class DungeonAssistant extends Module {
         return switch (type) {
             case SPAWNER              -> block == Blocks.SPAWNER;
             case CHEST                -> block == Blocks.CHEST || block == Blocks.TRAPPED_CHEST;
-            case CHEST_MINECART       -> true;
+            case CHEST_MINECART, MISROTATED_CHEST_MINECART, DISPLACED_CHEST_MINECART -> true;
             case CUSTOM_BLOCK         -> filterBlocks.get().contains(block);
             case MISROTATED_DEEPSLATE -> block == Blocks.DEEPSLATE;
             case LOW_Y_STONE_DIRT     -> block == Blocks.STONE || block == Blocks.DIRT;
@@ -1461,6 +1558,8 @@ public class DungeonAssistant extends Module {
             case SPAWNER              -> trackSpawners.get() ? spawnerColor.get() : null;
             case CHEST                -> chestColor.get();
             case CHEST_MINECART       -> chestMinecartColor.get();
+            case MISROTATED_CHEST_MINECART -> misrotatedMinecartColor.get();
+            case DISPLACED_CHEST_MINECART -> displacedMinecartColor.get();
             case CUSTOM_BLOCK         -> customBlockColor.get();
             case MISROTATED_DEEPSLATE -> misrotatedDeepslateColor.get();
             case LOW_Y_STONE_DIRT     -> lowYStoneDirtColor.get();
@@ -1540,9 +1639,11 @@ public class DungeonAssistant extends Module {
             double dz = pos.getZ() + 0.5 - mc.player.getZ();
             if (dx * dx + dz * dz > rangeSq) continue;
 
+            if (showDungeonsY.get() && pos.getY() > dungeonYLevel.get()) continue;
+
             if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
 
-            if (type != TargetType.CHEST_MINECART) {
+            if (type != TargetType.CHEST_MINECART && type != TargetType.MISROTATED_CHEST_MINECART && type != TargetType.DISPLACED_CHEST_MINECART) {
                 Block currentBlock = mc.world.getBlockState(pos).getBlock();
                 if (!validateBlockType(currentBlock, type)) continue;
             }
@@ -1572,9 +1673,11 @@ public class DungeonAssistant extends Module {
             double dz = pos.getZ() + 0.5 - mc.player.getZ();
             if (dx * dx + dz * dz > rangeSq) continue;
 
+            if (showDungeonsY.get() && pos.getY() > dungeonYLevel.get()) continue;
+
             if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
 
-            if (type != TargetType.CHEST_MINECART) {
+            if (type != TargetType.CHEST_MINECART && type != TargetType.MISROTATED_CHEST_MINECART && type != TargetType.DISPLACED_CHEST_MINECART) {
                 Block currentBlock = mc.world.getBlockState(pos).getBlock();
                 if (!validateBlockType(currentBlock, type)) continue;
             }

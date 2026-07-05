@@ -1,5 +1,8 @@
 package com.example.addon.modules;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.example.addon.HuntingUtilities;
 
 import meteordevelopment.meteorclient.events.world.TickEvent;
@@ -21,12 +24,9 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.util.Hand;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class Mendbot extends Module {
     public enum MendTarget { Elytra, Tools, Armour, All }
-    public enum MendSource { Bottles, Mining }
+    public enum MendSource { Bottles, Mining, Leveling }
 
     public enum MiningPreset {
         All_Materials,
@@ -59,6 +59,7 @@ public class Mendbot extends Module {
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgOres = settings.createGroup("Smart Ores");
+    private final SettingGroup sgLeveling = settings.createGroup("Leveling");
 
     private static final List<String> OVERWORLD_ORES = List.of("iron_ore", "gold_ore", "copper_ore", "coal_ore", "diamond_ore", "lapis_ore", "redstone_ore", "emerald_ore");
     private static final List<String> NETHER_ORES = List.of("nether_quartz_ore", "ancient_debris", "nether_gold_ore");
@@ -66,7 +67,7 @@ public class Mendbot extends Module {
     // --- Core Settings ---
     private final Setting<MendSource> mendSource = sgGeneral.add(new EnumSetting.Builder<MendSource>()
         .name("mend-source")
-        .description("How to get XP (Bottles or Mining Ores).")
+        .description("How to get XP (Bottles, Mining, or Leveling).")
         .defaultValue(MendSource.Bottles)
         .build()
     );
@@ -75,6 +76,30 @@ public class Mendbot extends Module {
         .name("mend-target")
         .description("What to repair.")
         .defaultValue(MendTarget.Elytra)
+        .visible(() -> mendSource.get() != MendSource.Leveling)
+        .build()
+    );
+
+    // --- Leveling Settings ---
+    private final Setting<Integer> targetLevel = sgLeveling.add(new IntSetting.Builder()
+        .name("target-level")
+        .description("The XP level to reach.")
+        .defaultValue(30)
+        .min(1)
+        .max(21863)
+        .sliderMax(100)
+        .visible(() -> mendSource.get() == MendSource.Leveling)
+        .build()
+    );
+
+    private final Setting<Integer> minBottleSlots = sgLeveling.add(new IntSetting.Builder()
+        .name("min-bottle-slots")
+        .description("Minimum hotbar slots with XP bottles before resuming. 0 = only pause when completely out.")
+        .defaultValue(0)
+        .min(0)
+        .max(9)
+        .sliderMax(9)
+        .visible(() -> mendSource.get() == MendSource.Leveling)
         .build()
     );
 
@@ -182,7 +207,7 @@ public class Mendbot extends Module {
         .defaultValue(3)
         .min(1)
         .sliderMax(10)
-        .visible(() -> mendSource.get() == MendSource.Bottles)
+        .visible(() -> mendSource.get() == MendSource.Bottles || mendSource.get() == MendSource.Leveling)
         .build()
     );
 
@@ -192,7 +217,7 @@ public class Mendbot extends Module {
         .defaultValue(4)
         .min(0)
         .sliderMax(20)
-        .visible(() -> mendSource.get() == MendSource.Bottles)
+        .visible(() -> mendSource.get() == MendSource.Bottles || mendSource.get() == MendSource.Leveling)
         .build()
     );
 
@@ -206,6 +231,7 @@ public class Mendbot extends Module {
     // Fields
     private int mendTimer = 0;
     private ItemStack savedHelmet = ItemStack.EMPTY;
+    private boolean isPaused = false;
     
     private MiningState miningState = MiningState.SEARCHING;
     private int currentRepairSlot = -1;
@@ -222,6 +248,7 @@ public class Mendbot extends Module {
     public void onActivate() {
         mendTimer = 0;
         startCommandSent = false;
+        isPaused = false;
         
         if (mendSource.get() == MendSource.Mining) {
             miningState = MiningState.SEARCHING;
@@ -259,6 +286,17 @@ public class Mendbot extends Module {
     }
     
     private boolean isHotbar(int slot) { return slot >= 0 && slot < 9; }
+    
+    private int countHotbarBottles() {
+        if (mc.player == null) return 0;
+        int count = 0;
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getStack(i).isOf(Items.EXPERIENCE_BOTTLE)) {
+                count++;
+            }
+        }
+        return count;
+    }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
@@ -283,6 +321,11 @@ public class Mendbot extends Module {
         if (lowHealthDisable.get() && mc.player.getHealth() <= healthThreshold.get()) {
             error("Low health detected! Disabling...");
             toggle();
+            return;
+        }
+
+        if (mendSource.get() == MendSource.Leveling) {
+            handleLeveling();
             return;
         }
 
@@ -312,6 +355,54 @@ public class Mendbot extends Module {
             info("Mending complete.");
             if (autoDisable.get()) toggle();
         }
+    }
+
+    // --- Leveling Logic ---
+    private void handleLeveling() {
+        // Check if target level reached
+        if (mc.player.experienceLevel >= targetLevel.get()) {
+            info("Target level " + targetLevel.get() + " reached!");
+            if (autoDisable.get()) toggle();
+            return;
+        }
+
+        // Count bottles in hotbar
+        int hotbarBottles = countHotbarBottles();
+        int anyBottleSlot = findItemSlot(Items.EXPERIENCE_BOTTLE);
+
+        // Determine if we should pause
+        boolean shouldPause = false;
+
+        if (anyBottleSlot == -1) {
+            // No bottles at all
+            shouldPause = true;
+        } else if (minBottleSlots.get() > 0 && hotbarBottles < minBottleSlots.get()) {
+            // Not enough bottles in hotbar
+            shouldPause = true;
+        }
+
+        if (shouldPause) {
+            if (!isPaused) {
+                if (anyBottleSlot == -1) {
+                    warning("No XP bottles detected — pausing...");
+                } else {
+                    warning("Waiting for XP bottles... (" + hotbarBottles + "/" + minBottleSlots.get() + " hotbar slots)");
+                }
+                isPaused = true;
+            }
+            return;
+        }
+
+        // We have bottles and meet the minimum requirement
+        if (isPaused) {
+            info("XP bottles available — resuming.");
+            isPaused = false;
+        }
+
+        if (mendTimer > 0) { mendTimer--; return; }
+
+        // Throw bottles
+        throwXpBottles();
     }
 
     // --- Smart Mining Logic ---
@@ -390,7 +481,6 @@ public class Mendbot extends Module {
                 targetIsOffhand = (targetEquipSlot == null && isTool(stack));
                 
                 if (targetEquipSlot == EquipmentSlot.HEAD && goldenHelmet.get()) {
-                    // Fallback just in case it wasn't filtered out by findNextDamagedItem
                     return; 
                 }
                 
