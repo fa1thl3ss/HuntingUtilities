@@ -25,12 +25,14 @@ Modules List;
 - Rocket Pilot
 - Server Healthcare System
 - Sign Scanner
+- Terralien
 - Third Sight
 - Time Throttle
 - Total Disposal
 - Tunnelers
 
 Hud List;
+- Motance
 - Portal Stock
 - Dungeon Assistant
 - Dura Panel
