@@ -32,7 +32,6 @@ Modules List;
 - Tunnelers
 
 Hud List;
-- Motance
 - Portal Stock
 - Dungeon Assistant
 - Dura Panel
