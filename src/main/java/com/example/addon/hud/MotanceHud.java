@@ -1,8 +1,17 @@
 package com.example.addon.hud;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.example.addon.HuntingUtilities;
 import com.mojang.blaze3d.systems.RenderSystem;
-import meteordevelopment.meteorclient.settings.*;
+
+import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
+import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.hud.HudElement;
 import meteordevelopment.meteorclient.systems.hud.HudElementInfo;
 import meteordevelopment.meteorclient.systems.hud.HudRenderer;
@@ -12,13 +21,10 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.util.Identifier;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class MotanceHud extends HudElement {
     public static final HudElementInfo<MotanceHud> INFO = new HudElementInfo<>(
         HuntingUtilities.HUD_GROUP, "Motance", 
-        "Motion + Stance. Displays status effect icons based on movement state.",
+        "Motance",
         "Shows icons for sneaking, jumping, and sprinting.",
         MotanceHud::new
     );

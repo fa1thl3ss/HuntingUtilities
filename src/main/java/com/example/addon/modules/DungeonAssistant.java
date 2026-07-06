@@ -3,9 +3,7 @@ package com.example.addon.modules;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -107,6 +105,7 @@ public class DungeonAssistant extends Module {
     private final List<ExperienceOrbEntity>  xpOrbTargets          = new ArrayList<>();
     private final Set<Integer>               notifiedEndermites    = new HashSet<>();
     private final Set<Integer>               checkedEntityIds      = new HashSet<>();
+    private final Set<Integer>               notifiedAnomalousMinecarts = new HashSet<>();
     private final Set<BlockPos>              spawnerTorches        = new HashSet<>();
 
     // Breaking
@@ -362,6 +361,22 @@ public class DungeonAssistant extends Module {
         .visible(() -> trackChestMinecarts.get() && trackAnomalousMinecarts.get()).build()
     );
 
+    private final Setting<Boolean> anomalyChatFeedback = sgChests.add(new BoolSetting.Builder()
+        .name("anomaly-chat-feedback")
+        .description("Sends a chat message when an anomalous minecart is found (no coordinates).")
+        .defaultValue(true)
+        .visible(() -> trackChestMinecarts.get() && trackAnomalousMinecarts.get())
+        .build()
+    );
+
+    private final Setting<Integer> anomalyBeamWidth = sgChests.add(new IntSetting.Builder()
+        .name("anomaly-beam-width")
+        .description("Width of the beam for anomalous minecarts.")
+        .defaultValue(15).min(5).max(50)
+        .visible(() -> trackChestMinecarts.get() && trackAnomalousMinecarts.get())
+        .build()
+    );
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Clutter Blocks
     // ═══════════════════════════════════════════════════════════════════════════
@@ -527,6 +542,7 @@ public class DungeonAssistant extends Module {
         xpOrbTargets.clear();
         notifiedEndermites.clear();
         checkedEntityIds.clear();
+        notifiedAnomalousMinecarts.clear();
         spawnerTorches.clear();
         brokenChestsCount = 0;
         lootFoundCount    = 0;
@@ -558,6 +574,7 @@ public class DungeonAssistant extends Module {
         xpOrbTargets.clear();
         notifiedEndermites.clear();
         checkedEntityIds.clear();
+        notifiedAnomalousMinecarts.clear();
         spawnerTorches.clear();
 
         resetSoftState();
@@ -628,8 +645,25 @@ public class DungeonAssistant extends Module {
                     ChestMinecartEntity.class, queryBox, entity -> true);
                 if (minecarts.isEmpty()) { toRemove.add(pos); continue; }
 
-                renderBox = getMinecartChestBox(minecarts.get(0));
+                ChestMinecartEntity cart = minecarts.get(0);
+                renderBox = getMinecartChestBox(cart);
                 color = getColor(type);
+
+                if (type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) {
+                    double beamSize = anomalyBeamWidth.get() / 100.0;
+                    Vec3d cartPos = cart.getPos();
+                    Box beamBox = new Box(
+                        cartPos.x - beamSize, cartPos.y, cartPos.z - beamSize,
+                        cartPos.x + beamSize, mc.world.getHeight(), cartPos.z + beamSize
+                    );
+                    
+                    if (isSpectral) {
+                        event.renderer.box(beamBox, withAlpha(color, 20), withAlpha(color, 180), ShapeMode.Both, 0);
+                    } else {
+                        renderGlowLayers(event, beamBox, color);
+                        event.renderer.box(beamBox, withAlpha(color, 60), color, ShapeMode.Both, 0);
+                    }
+                }
 
             } else {
                 if (!mc.world.getChunkManager().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) continue;
@@ -648,7 +682,8 @@ public class DungeonAssistant extends Module {
 
             if (isSpectral) {
                 int fillAlpha = (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) ? 0 : spectralBlockFillAlpha.get();
-                event.renderer.box(renderBox, withAlpha(color, fillAlpha), withAlpha(color, 0), ShapeMode.Sides, 0);
+                int outlineAlpha = (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) ? 200 : 0;
+                event.renderer.box(renderBox, withAlpha(color, fillAlpha), withAlpha(color, outlineAlpha), ShapeMode.Sides, 0);
             } else {
                 renderGlowLayers(event, renderBox, color);
                 event.renderer.box(renderBox, withAlpha(color, 0), color, ShapeMode.Lines, 0);
@@ -679,16 +714,19 @@ public class DungeonAssistant extends Module {
             for (EndermiteEntity endermite : endermiteTargets) {
                 if (!endermite.isAlive()) continue;
 
-                if (!isSpectral) {
+                double beamSize = endermiteBeamWidth.get() / 100.0;
+                Vec3d  epos     = endermite.getPos();
+                Box    beamBox  = new Box(
+                    epos.x - beamSize, epos.y, epos.z - beamSize,
+                    epos.x + beamSize, mc.world.getHeight(), epos.z + beamSize
+                );
+
+                if (isSpectral) {
+                    event.renderer.box(endermite.getBoundingBox(), withAlpha(color, 0), withAlpha(color, 200), ShapeMode.Lines, 0);
+                    event.renderer.box(beamBox, withAlpha(color, 20), withAlpha(color, 180), ShapeMode.Both, 0);
+                } else {
                     renderGlowLayers(event, endermite.getBoundingBox(), color);
                     event.renderer.box(endermite.getBoundingBox(), withAlpha(color, 0), color, ShapeMode.Lines, 0);
-
-                    double beamSize = endermiteBeamWidth.get() / 100.0;
-                    Vec3d  epos     = endermite.getPos();
-                    Box    beamBox  = new Box(
-                        epos.x - beamSize, epos.y, epos.z - beamSize,
-                        epos.x + beamSize, mc.world.getHeight(), epos.z + beamSize
-                    );
                     renderGlowLayers(event, beamBox, color);
                     event.renderer.box(beamBox, withAlpha(color, 60), color, ShapeMode.Both, 0);
                 }
@@ -701,7 +739,9 @@ public class DungeonAssistant extends Module {
                 if (!orb.isAlive()) continue;
                 Box orbBox = orb.getBoundingBox();
 
-                if (!isSpectral) {
+                if (isSpectral) {
+                    event.renderer.box(orbBox, withAlpha(color, 0), withAlpha(color, 200), ShapeMode.Lines, 0);
+                } else {
                     renderGlowLayers(event, orbBox, color);
                     event.renderer.box(orbBox, withAlpha(color, 0), color, ShapeMode.Lines, 0);
                 }
@@ -1152,6 +1192,7 @@ public class DungeonAssistant extends Module {
         scannedChunks.clear();
         checkedContainers.clear();
         checkedEntityIds.clear();
+        notifiedAnomalousMinecarts.clear();
         GlowingRegistry.clear();
     }
 
@@ -1350,16 +1391,16 @@ public class DungeonAssistant extends Module {
         }
     }
 
-    private TargetType getMinecartType(ChestMinecartEntity cart) {
+        private TargetType getMinecartType(ChestMinecartEntity cart) {
         Vec3d exactPos = cart.getPos();
         BlockPos blockPos = cart.getBlockPos();
         
-        // 1. Check if physically displaced (Stuck in a wall OR shifted off the rail center)
         boolean isDisplaced = false;
         BlockState stateAtPos = mc.world.getBlockState(blockPos);
         
-        // Check A: Is it clipping into a solid block that isn't a rail? (e.g., generated inside a dungeon wall)
-        if (!stateAtPos.isAir() && stateAtPos.isSolid() && !(stateAtPos.getBlock() instanceof AbstractRailBlock)) {
+        // Check A: Is it clipping into a solid block that isn't a rail?
+        // Replaced deprecated isSolid() with getCollisionShape() check for 1.21.4
+        if (!stateAtPos.isAir() && !stateAtPos.getCollisionShape(mc.world, blockPos).isEmpty() && !(stateAtPos.getBlock() instanceof AbstractRailBlock)) {
             isDisplaced = true;
         } else {
             // Check B: Is it significantly offset from the center of the block it's currently inside?
@@ -1368,7 +1409,6 @@ public class DungeonAssistant extends Module {
             double offsetX = Math.abs(exactPos.x - closestCenterX);
             double offsetZ = Math.abs(exactPos.z - closestCenterZ);
             
-            // > 0.1 perfectly ignores vanilla physics bobbing/curves, but catches dungeon generation glitches
             if (offsetX > 0.1 || offsetZ > 0.1) {
                 isDisplaced = true;
             }
@@ -1389,13 +1429,11 @@ public class DungeonAssistant extends Module {
         }
         if (isDisplaced) return TargetType.DISPLACED_CHEST_MINECART;
 
-        // 2. Check if rotation is misaligned
         float yaw = ((cart.getYaw() % 360) + 360) % 360;
         float remainder = yaw % 90;
         boolean isMisrotated = remainder > 5.0f && remainder < 85.0f;
         if (isMisrotated) return TargetType.MISROTATED_CHEST_MINECART;
 
-        // 3. Fallback to normal
         return TargetType.CHEST_MINECART;
     }
 
@@ -1431,6 +1469,17 @@ public class DungeonAssistant extends Module {
                 targets.put(pos, targetType);
                 if (isSpectral) GlowingRegistry.add(minecart.getId(), color);
                 else GlowingRegistry.remove(minecart.getId());
+
+                if (anomalyChatFeedback.get() && (targetType == TargetType.DISPLACED_CHEST_MINECART || targetType == TargetType.MISROTATED_CHEST_MINECART)) {
+                    if (notifiedAnomalousMinecarts.add(minecart.getId())) {
+                        if (targetType == TargetType.DISPLACED_CHEST_MINECART) {
+                            info("§bDisplaced minecart detected!");
+                        } else {
+                            info("§5Misrotated minecart detected!");
+                        }
+                        mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 0.5f);
+                    }
+                }
             }
         }
 
@@ -1478,13 +1527,14 @@ public class DungeonAssistant extends Module {
     }
 
     private void pruneCheckedEntityIds() {
-        if (checkedEntityIds.isEmpty()) return;
+        if (checkedEntityIds.isEmpty() && notifiedAnomalousMinecarts.isEmpty()) return;
         Set<Integer> liveIds = new HashSet<>();
         for (ChestMinecartEntity e : mc.world.getEntitiesByClass(
-                ChestMinecartEntity.class, new Box(mc.player.getBlockPos()).expand(8), Entity::isAlive)) {
+                ChestMinecartEntity.class, new Box(mc.player.getBlockPos()).expand(range.get() * 16), Entity::isAlive)) {
             liveIds.add(e.getId());
         }
         checkedEntityIds.retainAll(liveIds);
+        notifiedAnomalousMinecarts.retainAll(liveIds);
     }
 
     private void pruneCheckedContainers() {
