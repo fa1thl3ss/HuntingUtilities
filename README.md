@@ -11,6 +11,7 @@ Modules List;
 - EndSafe
 - Gatekeeper
 - Graveyard
+- Handhold
 - Handmold
 - Illushine
 - Inspect Gadget
