@@ -26,6 +26,7 @@ import com.example.addon.modules.ElytraAssistant;
 import com.example.addon.modules.EndSafe;
 import com.example.addon.modules.Gatekeeper;
 import com.example.addon.modules.Graveyard;
+import com.example.addon.modules.Handhold;
 import com.example.addon.modules.Handmold;
 import com.example.addon.modules.Illushine;
 import com.example.addon.modules.InspectorGadget;
@@ -69,6 +70,7 @@ public class HuntingUtilities extends MeteorAddon {
         modules.add(new EndSafe());
         modules.add(new Gatekeeper());
         modules.add(new Graveyard());
+        modules.add(new Handhold());
         modules.add(new Handmold());
         modules.add(new Illushine());
         modules.add(new InspectorGadget());
