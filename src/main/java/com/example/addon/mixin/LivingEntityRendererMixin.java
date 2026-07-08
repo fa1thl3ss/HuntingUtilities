@@ -16,26 +16,23 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(LivingEntityRenderer.class)
 public class LivingEntityRendererMixin {
 
-    // ThreadLocal safely stores the mob being rendered on the Render thread
     @Unique
     private static final ThreadLocal<MobEntity> illushine$currentMob = new ThreadLocal<>();
 
-    /**
-     * Captures the actual MobEntity instance before scaling happens.
-     */
     @Inject(method = "updateRenderState(Lnet/minecraft/entity/LivingEntity;Lnet/minecraft/client/render/entity/state/LivingEntityRenderState;F)V", at = @At("TAIL"))
     private void illushine$captureEntity(LivingEntity entity, LivingEntityRenderState state, float tickDelta, CallbackInfo ci) {
         illushine$currentMob.set(entity instanceof MobEntity mob ? mob : null);
     }
 
-    /**
-     * Scales the 3D model using the entity we safely captured.
-     */
     @Inject(method = "scale(Lnet/minecraft/client/render/entity/state/LivingEntityRenderState;Lnet/minecraft/client/util/math/MatrixStack;)V", at = @At("TAIL"))
     private void illushine$onScale(LivingEntityRenderState state, MatrixStack matrices, CallbackInfo ci) {
         MobEntity mob = illushine$currentMob.get();
         if (mob != null) {
-            illushine$currentMob.set(null); // Clear it to prevent memory leaks
+            // SAFETY: Prevent freeze if the mob dies or the world unloads while rendering
+            if (!mob.isAlive()) {
+                illushine$currentMob.set(null);
+                return;
+            }
 
             Illushine illushine = Modules.get().get(Illushine.class);
             if (illushine == null || !illushine.isActive()) return;
@@ -45,6 +42,8 @@ public class LivingEntityRendererMixin {
             if (scale != 1.0) {
                 matrices.scale((float) scale, (float) scale, (float) scale);
             }
+            
+            illushine$currentMob.set(null); // Clear to prevent memory leaks
         }
     }
 }

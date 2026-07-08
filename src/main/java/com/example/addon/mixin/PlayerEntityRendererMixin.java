@@ -16,15 +16,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(PlayerEntityRenderer.class)
 public class PlayerEntityRendererMixin {
 
-    /**
-     * Targets the NEW 1.21.4 RenderState scaling method.
-     * This purely scales the 3D model without touching hitboxes or physics!
-     */
     @Inject(method = "scale(Lnet/minecraft/client/render/entity/state/PlayerEntityRenderState;Lnet/minecraft/client/util/math/MatrixStack;)V", at = @At("TAIL"))
     private void onScale(PlayerEntityRenderState state, MatrixStack matrices, CallbackInfo ci) {
-        if (MinecraftClient.getInstance().world == null) return;
+        // SAFETY: Prevent crash when disconnecting
+        if (MinecraftClient.getInstance().world == null || MinecraftClient.getInstance().player == null) return;
 
-        // In 1.21.4, RenderState holds the entity ID instead of the entity object directly.
         Entity entity = MinecraftClient.getInstance().world.getEntityById(state.id);
         if (!(entity instanceof PlayerEntity player)) return;
 
@@ -33,11 +29,9 @@ public class PlayerEntityRendererMixin {
 
         float scale = 1.0f;
 
-        // Check if it's the local player (you)
         if (player.equals(MinecraftClient.getInstance().player)) {
             scale = (float) illushine.getPlayerScale();
         } 
-        // Check if it's someone else
         else if (illushine.getScaleOtherPlayers()) {
             scale = (float) illushine.getOtherPlayerScale();
         }

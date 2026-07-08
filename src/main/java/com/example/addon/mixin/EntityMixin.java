@@ -15,6 +15,9 @@ public class EntityMixin {
 
     @Inject(method = "getEyeY()D", at = @At("RETURN"), cancellable = true)
     private void onGetEyeY(CallbackInfoReturnable<Double> cir) {
+        // SAFETY: Prevent crash when disconnecting
+        if (MinecraftClient.getInstance().player == null) return;
+
         Entity self = (Entity) (Object) this;
         
         if (self instanceof PlayerEntity player && player.equals(MinecraftClient.getInstance().player)) {
@@ -23,18 +26,8 @@ public class EntityMixin {
                 double scale = illushine.getPlayerScale();
                 if (scale != 1.0) {
                     double difference = 1.62 * (scale - 1.0);
-                    double newY = cir.getReturnValue() + difference;
-                    
-                    if (illushine.isDebugPlayerScale()) {
-                        System.out.println("[Illushine Debug] EntityMixin getEyeY SUCCESS! Original: " + cir.getReturnValue() + " | New: " + newY);
-                    }
-                    
-                    cir.setReturnValue(newY);
-                } else if (illushine.isDebugPlayerScale()) {
-                    System.out.println("[Illushine Debug] EntityMixin getEyeY triggered, but scale is 1.0");
+                    cir.setReturnValue(cir.getReturnValue() + difference);
                 }
-            } else if (illushine != null && illushine.isDebugPlayerScale()) {
-                System.out.println("[Illushine Debug] EntityMixin getEyeY triggered, but Illushine is NOT active.");
             }
         }
     }
