@@ -15,14 +15,6 @@ public class ClientPlayerEntityMixin {
     @Shadow public float nauseaIntensity;
     @Shadow public float prevNauseaIntensity;
 
-    /**
-     * When portalGui is enabled, cancel the portal nausea tick entirely and keep
-     * nauseaIntensity at 0. This prevents two things:
-     *   1. nauseaIntensity reaching >= 1.0f, which Minecraft uses to block inventory
-     *      interactions (chat uses a separate path and is unaffected).
-     *   2. tickNausea calling setScreen(null/portalScreen), which would close or
-     *      replace any open screen (inventory, chat, etc.).
-     */
     @Inject(method = "tickNausea", at = @At("HEAD"), cancellable = true)
     private void onTickNausea(boolean fromPortalEffect, CallbackInfo ci) {
         if (!fromPortalEffect) return;

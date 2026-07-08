@@ -139,6 +139,7 @@ public class Illushine extends Module {
     private final SettingGroup sgNeutral   = settings.createGroup("Neutral");
     private final SettingGroup sgHostile   = settings.createGroup("Hostile");
     private final SettingGroup sgGlow      = settings.createGroup("Glow");
+    private final SettingGroup sgPlayer    = settings.createGroup("Player Scale");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — General
@@ -224,6 +225,10 @@ public class Illushine extends Module {
         .name("passive-color").description("Outline color for passive mobs.")
         .defaultValue(new SettingColor(0, 255, 100, 255)).visible(highlightPassive::get).build());
 
+    private final Setting<Double> passiveScale = sgPassive.add(new DoubleSetting.Builder()
+        .name("passive-scale").description("Visual scale for passive mobs.")
+        .defaultValue(1.0).min(0.1).sliderMax(3.0).visible(highlightPassive::get).build());
+
     private final Setting<Boolean> highlightNeutral = sgNeutral.add(new BoolSetting.Builder()
         .name("highlight-neutral").description("Highlight neutral mobs.").defaultValue(true).build());
 
@@ -231,12 +236,20 @@ public class Illushine extends Module {
         .name("neutral-color").description("Outline color for neutral mobs.")
         .defaultValue(new SettingColor(255, 200, 0, 255)).visible(highlightNeutral::get).build());
 
+    private final Setting<Double> neutralScale = sgNeutral.add(new DoubleSetting.Builder()
+        .name("neutral-scale").description("Visual scale for neutral mobs.")
+        .defaultValue(1.0).min(0.1).sliderMax(3.0).visible(highlightNeutral::get).build());
+
     private final Setting<Boolean> highlightHostile = sgHostile.add(new BoolSetting.Builder()
         .name("highlight-hostile").description("Highlight hostile mobs.").defaultValue(true).build());
 
     private final Setting<SettingColor> hostileColor = sgHostile.add(new ColorSetting.Builder()
         .name("hostile-color").description("Outline color for hostile mobs.")
         .defaultValue(new SettingColor(255, 50, 50, 255)).visible(highlightHostile::get).build());
+
+    private final Setting<Double> hostileScale = sgHostile.add(new DoubleSetting.Builder()
+        .name("hostile-scale").description("Visual scale for hostile mobs.")
+        .defaultValue(1.0).min(0.1).sliderMax(3.0).visible(highlightHostile::get).build());
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Glow (Wireframe mode only)
@@ -270,6 +283,40 @@ public class Illushine extends Module {
         .build());
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Settings — Player Scale
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private final Setting<Double> playerScale = sgPlayer.add(new DoubleSetting.Builder()
+        .name("player-scale")
+        .description("Visually scales your own player model and camera height.")
+        .defaultValue(1.0).min(0.1).sliderMax(3.0)
+        .build()
+    );
+
+    private final Setting<Boolean> scaleOtherPlayers = sgPlayer.add(new BoolSetting.Builder()
+        .name("scale-other-players")
+        .description("Apply a visual scale to other players.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Double> otherPlayerScale = sgPlayer.add(new DoubleSetting.Builder()
+        .name("other-player-scale")
+        .description("Visual scale applied to other players.")
+        .defaultValue(1.0).min(0.1).sliderMax(3.0)
+        .visible(scaleOtherPlayers::get)
+        .build()
+    );
+
+    // DEBUG SETTING
+    private final Setting<Boolean> debugPlayerScale = sgPlayer.add(new BoolSetting.Builder()
+        .name("debug-player-scale")
+        .description("Spams console logs to figure out why scaling isn't working.")
+        .defaultValue(false)
+        .build()
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // State
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -289,6 +336,19 @@ public class Illushine extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     public CrosshairMode getCrosshairMode() { return crosshairMode.get(); }
+    public double getPlayerScale() { return playerScale.get(); }
+    public boolean getScaleOtherPlayers() { return scaleOtherPlayers.get(); }
+    public double getOtherPlayerScale() { return otherPlayerScale.get(); }
+    public boolean isDebugPlayerScale() { return debugPlayerScale.get(); }
+
+    public double getMobScale(MobEntity mob) {
+        MobCategory cat = categorise(mob);
+        return switch (cat) {
+            case PASSIVE -> passiveScale.get();
+            case NEUTRAL -> neutralScale.get();
+            case HOSTILE -> hostileScale.get();
+        };
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Lifecycle
