@@ -35,7 +35,7 @@ import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.entry.RegistryEntry;
@@ -137,16 +137,24 @@ public class ServerHealthcareSystem extends Module {
 
     private final Setting<Boolean> autoEat = sgAutoEat.add(new BoolSetting.Builder()
         .name("auto-eat")
-        .description("Automatically eats food when conditions are met. Always operates silently.")
+        .description("Automatically eats food when conditions are met.")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<EatMode> eatMode = sgAutoEat.add(new EnumSetting.Builder<EatMode>()
         .name("eat-mode")
-        .description("Emergency eats only Enchanted Golden Apples. Standard Food eats only normal food. Smart mixes both.")
-        .defaultValue(EatMode.Emergency)
+        .description("What types of food to eat.")
+        .defaultValue(EatMode.GoldenApplesOnly)
         .visible(autoEat::get)
+        .build()
+    );
+
+    private final Setting<Boolean> preferEnchanted = sgAutoEat.add(new BoolSetting.Builder()
+        .name("prefer-enchanted")
+        .description("Prefer enchanted golden apples over regular ones.")
+        .defaultValue(false)
+        .visible(() -> autoEat.get() && eatMode.get() != EatMode.NormalFoodOnly)
         .build()
     );
 
@@ -164,7 +172,7 @@ public class ServerHealthcareSystem extends Module {
     private final Setting<Integer> hungerThreshold = sgAutoEat.add(new IntSetting.Builder()
         .name("hunger-threshold")
         .description("Eat when hunger drops below this value (out of 20). Set to 0 to disable hunger-based eating.")
-        .defaultValue(18) // 2 hunger bars missing
+        .defaultValue(6)
         .min(0)
         .max(20)
         .sliderRange(0, 20)
@@ -176,7 +184,7 @@ public class ServerHealthcareSystem extends Module {
         .name("eat-on-fire")
         .description("Eat when on fire and taking damage.")
         .defaultValue(true)
-        .visible(autoEat::get)
+        .visible(() -> autoEat.get() && eatMode.get() != EatMode.NormalFoodOnly)
         .build()
     );
 
@@ -191,19 +199,27 @@ public class ServerHealthcareSystem extends Module {
         .build()
     );
 
+    private final Setting<Boolean> swapBack = sgAutoEat.add(new BoolSetting.Builder()
+        .name("swap-back")
+        .description("Swap back to original slot after eating.")
+        .defaultValue(true)
+        .visible(autoEat::get)
+        .build()
+    );
+
     private final Setting<Boolean> pauseInCombat = sgAutoEat.add(new BoolSetting.Builder()
         .name("pause-in-combat")
         .description("Don't eat normal food while taking damage (gapples still work).")
         .defaultValue(false)
-        .visible(() -> autoEat.get() && eatMode.get() != EatMode.Emergency)
+        .visible(() -> autoEat.get() && eatMode.get() != EatMode.GoldenApplesOnly)
         .build()
     );
 
     private final Setting<Boolean> skipIfRegen = sgAutoEat.add(new BoolSetting.Builder()
         .name("skip-if-regen")
-        .description("Doesn't eat enchanted golden apples if you already have the regeneration effect.")
+        .description("Doesn't eat golden apples if you already have the regeneration effect.")
         .defaultValue(true)
-        .visible(() -> autoEat.get() && eatMode.get() != EatMode.StandardFood)
+        .visible(() -> autoEat.get() && eatMode.get() != EatMode.NormalFoodOnly)
         .build()
     );
 
@@ -251,7 +267,6 @@ public class ServerHealthcareSystem extends Module {
 
     // Auto Eat
     private boolean isEating              = false;
-    private boolean eatStarted            = false;
     private boolean ateForFire            = false;
     private boolean tookDamageWhileOnFire = false;
     private int     eatHotbarSlot         = -1;
@@ -318,7 +333,6 @@ public class ServerHealthcareSystem extends Module {
 
     private void resetState() {
         isEating              = false;
-        eatStarted            = false;
         ateForFire            = false;
         tookDamageWhileOnFire = false;
         eatHotbarSlot         = -1;
@@ -336,7 +350,6 @@ public class ServerHealthcareSystem extends Module {
     private void stopEating() {
         mc.options.useKey.setPressed(false);
         isEating              = false;
-        eatStarted            = false;
         eatHotbarSlot         = -1;
         eatOriginalHotbarSlot = -1;
         eatTargetItem         = null;
@@ -347,13 +360,12 @@ public class ServerHealthcareSystem extends Module {
     private void finishEating() {
         mc.options.useKey.setPressed(false);
 
-        // Always swap back to original slot
-        if (eatOriginalHotbarSlot != -1 && eatOriginalHotbarSlot != eatHotbarSlot) {
+        // Swap back to original slot
+        if (swapBack.get() && eatOriginalHotbarSlot != -1 && eatOriginalHotbarSlot != eatHotbarSlot) {
             InvUtils.swap(eatOriginalHotbarSlot, false);
         }
 
         isEating              = false;
-        eatStarted            = false;
         eatHotbarSlot         = -1;
         eatOriginalHotbarSlot = -1;
         eatTargetItem         = null;
@@ -363,8 +375,15 @@ public class ServerHealthcareSystem extends Module {
     }
 
     private void sendUseItemPacket() {
-        if (mc.player == null || mc.interactionManager == null) return;
-        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        if (mc.player == null) return;
+        mc.player.networkHandler.sendPacket(
+            new PlayerInteractItemC2SPacket(
+                Hand.MAIN_HAND,
+                mc.player.currentScreenHandler.getRevision(),
+                mc.player.getYaw(),
+                mc.player.getPitch()
+            )
+        );
         mc.player.swingHand(Hand.MAIN_HAND);
     }
 
@@ -541,7 +560,7 @@ public class ServerHealthcareSystem extends Module {
             boolean needsFireEat = eatOnFire.get()
                 && mc.player.isOnFire() && tookDamageWhileOnFire && !ateForFire;
 
-            // Determine if this is an emergency (requires egaps in Smart mode)
+            // Determine if this is an emergency (requires gapples)
             boolean isEmergency = needsHealth || needsFireEat;
 
             // Don't eat normal food in combat if setting enabled
@@ -558,7 +577,7 @@ public class ServerHealthcareSystem extends Module {
             eatTargetItem = foodStack.getItem();
 
             // Cancel if we already have regeneration and the toggle is on
-            if (skipIfRegen.get() && foodStack.isOf(Items.ENCHANTED_GOLDEN_APPLE)) {
+            if (skipIfRegen.get() && (foodStack.isOf(Items.GOLDEN_APPLE) || foodStack.isOf(Items.ENCHANTED_GOLDEN_APPLE))) {
                 if (mc.player.hasStatusEffect(StatusEffects.REGENERATION)) {
                     return;
                 }
@@ -569,22 +588,21 @@ public class ServerHealthcareSystem extends Module {
 
             if (foodSlot < 9) {
                 eatHotbarSlot = foodSlot;
-                mc.player.getInventory().selectedSlot = eatHotbarSlot;
-                InvUtils.swap(eatHotbarSlot, false); // Sync with server
-                eatStartupTicks = 2; // Wait 2 ticks for server to process slot change
             } else {
                 eatHotbarSlot = findEmptyHotbarSlot();
                 if (eatHotbarSlot == -1) eatHotbarSlot = eatOriginalHotbarSlot;
                 InvUtils.move().from(foodSlot).toHotbar(eatHotbarSlot);
-                mc.player.getInventory().selectedSlot = eatHotbarSlot;
-                InvUtils.swap(eatHotbarSlot, false); // Sync with server
-                eatStartupTicks = 4; // Wait 4 ticks for inventory move to sync
             }
 
+            mc.player.getInventory().selectedSlot = eatHotbarSlot;
+
             // Calculate actual eat duration from item
-            eatTicksRemaining = eatTargetItem.getMaxUseTime(foodStack, mc.player);
+            eatTicksRemaining = foodStack.getItem().getMaxUseTime(foodStack, mc.player);
+            eatStartupTicks = 3;
+
+            mc.options.useKey.setPressed(true);
+            sendUseItemPacket();
             isEating = true;
-            eatStarted = false;
 
             if (needsFireEat) {
                 ateForFire            = true;
@@ -595,43 +613,39 @@ public class ServerHealthcareSystem extends Module {
             // Eating in progress
             if (eatStartupTicks > 0) {
                 eatStartupTicks--;
-                // Ensure slot stays selected locally
                 mc.player.getInventory().selectedSlot = eatHotbarSlot;
-                return; // Wait for server sync
+                mc.options.useKey.setPressed(true);
+                if (eatTicksRemaining > 0) eatTicksRemaining--;
+                return;
             }
 
-            // Force slot to stay selected
+            ItemStack hotbarStack = mc.player.getInventory().getStack(eatHotbarSlot);
+            boolean hotbarHasFood = eatTargetItem != null && hotbarStack.isOf(eatTargetItem);
+
+            // If the food was physically removed from the slot, stop.
+            if (!hotbarHasFood) {
+                finishEating();
+                return;
+            }
+
+            // If a GUI (like inventory) opens, stop.
+            if (mc.currentScreen != null) {
+                finishEating();
+                return;
+            }
+
+            // Force keep the slot selected and right-click held down.
+            // We DO NOT check mc.player.isUsingItem() here because taking damage 
+            // or sprinting will momentarily set it to false on the client side,
+            // which was causing it to cancel while walking or falling into lava.
             mc.player.getInventory().selectedSlot = eatHotbarSlot;
+            mc.options.useKey.setPressed(true);
 
-            if (!eatStarted) {
-                // Sync complete, send the start eating packet directly to server
-                sendUseItemPacket();
-                eatStarted = true;
-            }
-
+            // Rely purely on the server-accurate tick timer
             if (eatTicksRemaining > 0) {
                 eatTicksRemaining--;
-                
-                // Safety check: If the item disappears, stop trying to eat
-                ItemStack hotbarStack = mc.player.getInventory().getStack(eatHotbarSlot);
-                if (!hotbarStack.isOf(eatTargetItem)) {
-                    finishEating();
-                }
             } else {
                 finishEating();
-            }
-        }
-    }
-
-    // ── Packet Handlers ───────────────────────────────────────────────────────
-
-    @EventHandler
-    private void onPacketSend(PacketEvent.Send event) {
-        // Intercept and cancel the "stop eating" packet while auto-eating.
-        // This prevents opening inventories/chats from canceling our silent eat.
-        if (event.packet instanceof PlayerActionC2SPacket packet) {
-            if (packet.getAction() == PlayerActionC2SPacket.Action.RELEASE_USE_ITEM && isEating) {
-                event.cancel();
             }
         }
     }
@@ -660,7 +674,8 @@ public class ServerHealthcareSystem extends Module {
 
     private boolean isEdible(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return false;
-        return stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)
+        return stack.isOf(Items.GOLDEN_APPLE)
+            || stack.isOf(Items.ENCHANTED_GOLDEN_APPLE)
             || stack.get(DataComponentTypes.FOOD) != null;
     }
 
@@ -674,18 +689,18 @@ public class ServerHealthcareSystem extends Module {
     private int findBestFood(boolean emergency) {
         EatMode mode = eatMode.get();
 
-        if (mode == EatMode.Emergency) {
-            return findBestEgapple();
+        if (mode == EatMode.GoldenApplesOnly || emergency) {
+            return findBestGapple();
         }
 
-        if (mode == EatMode.StandardFood) {
+        if (mode == EatMode.NormalFoodOnly) {
             return findBestNormalFood();
         }
 
-        // Smart mode: egapples for emergency, normal food otherwise
+        // Smart mode: gapples for emergency, normal food otherwise
         if (emergency) {
-            int egapple = findBestEgapple();
-            if (egapple != -1) return egapple;
+            int gapple = findBestGapple();
+            if (gapple != -1) return gapple;
         }
         return findBestNormalFood();
     }
@@ -726,9 +741,11 @@ public class ServerHealthcareSystem extends Module {
         return hotbarBest != -1 ? hotbarBest : bestSlot;
     }
 
-    private int findBestEgapple() {
-        int hotbarEgapple = -1;
+    private int findBestGapple() {
+        int hotbarGapple     = -1;
+        int hotbarEgapple    = -1;
         int inventoryEgapple = -1;
+        int inventoryGapple  = -1;
 
         for (int i = 0; i < 36; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
@@ -740,12 +757,28 @@ public class ServerHealthcareSystem extends Module {
                 } else {
                     if (inventoryEgapple == -1) inventoryEgapple = i;
                 }
+            } else if (stack.isOf(Items.GOLDEN_APPLE)) {
+                if (i < 9) {
+                    if (hotbarGapple == -1) hotbarGapple = i;
+                } else {
+                    if (inventoryGapple == -1) inventoryGapple = i;
+                }
             }
         }
 
-        // Always prefer hotbar over inventory for faster access
-        if (hotbarEgapple != -1) return hotbarEgapple;
-        return inventoryEgapple;
+        if (preferEnchanted.get()) {
+            // Prefer enchanted
+            if (hotbarEgapple != -1) return hotbarEgapple;
+            if (inventoryEgapple != -1) return inventoryEgapple;
+            if (hotbarGapple != -1) return hotbarGapple;
+            return inventoryGapple;
+        } else {
+            // Prefer regular to save enchanted
+            if (hotbarGapple != -1) return hotbarGapple;
+            if (inventoryGapple != -1) return inventoryGapple;
+            if (hotbarEgapple != -1) return hotbarEgapple;
+            return inventoryEgapple;
+        }
     }
 
     private void handleChestplateElytraSwitch() {
@@ -894,14 +927,8 @@ public class ServerHealthcareSystem extends Module {
     }
 
     public enum EatMode {
-        Emergency,
-        StandardFood,
-        Smart;
-
-        @Override
-        public String toString() {
-            if (this == StandardFood) return "Standard Food";
-            return name();
-        }
+        GoldenApplesOnly,
+        NormalFoodOnly,
+        Smart
     }
 }
