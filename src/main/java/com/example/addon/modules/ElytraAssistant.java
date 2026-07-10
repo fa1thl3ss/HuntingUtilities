@@ -32,7 +32,11 @@ public class ElytraAssistant extends Module {
     // Enums
     // ═══════════════════════════════════════════════════════════════════════════
 
-    public enum MiddleClickAction { None, Rocket, Pearl }
+    public enum MiddleClickAction {
+        None,
+        Rocket,
+        Pearl
+    }
 
     public enum WarningSound {
         Anvil,
@@ -58,111 +62,131 @@ public class ElytraAssistant extends Module {
     // Setting Groups
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final SettingGroup sgDurability = settings.createGroup("Durability");
-    private final SettingGroup sgUtilities  = settings.createGroup("Utilities");
+    private final SettingGroup sgAutoReplace = settings.createGroup("Auto Replace");
+    private final SettingGroup sgMiddleClick = settings.createGroup("Middle Click");
+    private final SettingGroup sgMisc        = settings.createGroup("Miscellaneous");
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Durability
+    // Settings — Auto Replace
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final Setting<Boolean> enableAutoSwap = sgDurability.add(new BoolSetting.Builder()
-        .name("enable-auto-swap")
-        .description("Automatically swap to a fresh elytra when durability is low.")
+    private final Setting<Boolean> autoReplace = sgAutoReplace.add(new BoolSetting.Builder()
+        .name("auto-replace")
+        .description("Automatically replace elytra when durability is low.")
         .defaultValue(true)
         .build()
     );
 
-    private final Setting<Integer> durabilityThreshold = sgDurability.add(new IntSetting.Builder()
+    private final Setting<Integer> durabilityThreshold = sgAutoReplace.add(new IntSetting.Builder()
         .name("durability-threshold")
-        .description("Remaining durability below which swap occurs.")
+        .description("Minimum durability before replacing.")
         .defaultValue(10)
         .min(1)
         .sliderMax(100)
-        .visible(enableAutoSwap::get)
+        .visible(autoReplace::get)
         .build()
     );
 
-    private final Setting<WarningSound> warningSoundType = sgDurability.add(new EnumSetting.Builder<WarningSound>()
+    private final Setting<WarningSound> warningSoundType = sgAutoReplace.add(new EnumSetting.Builder<WarningSound>()
         .name("warning-sound")
         .description("Sound played when no replacement elytra is available.")
         .defaultValue(WarningSound.Anvil)
-        .visible(enableAutoSwap::get)
+        .visible(autoReplace::get)
         .build()
     );
 
-    private final Setting<Double> warningSoundVolume = sgDurability.add(new DoubleSetting.Builder()
+    private final Setting<Double> warningSoundVolume = sgAutoReplace.add(new DoubleSetting.Builder()
         .name("warning-volume")
-        .description("Volume of the no-replacement warning sound.")
+        .description("Volume of the warning sound.")
         .defaultValue(1.0)
         .min(0.1)
         .sliderMax(2.0)
-        .visible(enableAutoSwap::get)
+        .visible(autoReplace::get)
         .build()
     );
 
-    private final Setting<Keybind> autoSwapKey = sgDurability.add(new KeybindSetting.Builder()
-        .name("auto-swap-key")
-        .description("Key to toggle auto swap.")
+    private final Setting<Keybind> toggleKey = sgAutoReplace.add(new KeybindSetting.Builder()
+        .name("toggle-key")
+        .description("Key to toggle auto replace.")
         .defaultValue(Keybind.none())
         .action(() -> {
             if (mc.currentScreen != null) return;
-            boolean val = !enableAutoSwap.get();
-            enableAutoSwap.set(val);
-            info("Auto Swap " + (val ? "enabled" : "disabled") + ".");
+            boolean enabled = !autoReplace.get();
+            autoReplace.set(enabled);
+            info("Auto Replace " + (enabled ? "enabled" : "disabled") + ".");
         })
         .build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Utilities
+    // Settings — Middle Click
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final Setting<MiddleClickAction> middleClickAction = sgUtilities.add(new EnumSetting.Builder<MiddleClickAction>()
-        .name("middle-click-action")
+    private final Setting<MiddleClickAction> middleClickAction = sgMiddleClick.add(new EnumSetting.Builder<MiddleClickAction>()
+        .name("action")
         .description("Item to use when middle clicking.")
         .defaultValue(MiddleClickAction.None)
         .build()
     );
 
-    public final Setting<Boolean> silentRocket = sgUtilities.add(new BoolSetting.Builder()
+    public final Setting<Boolean> silentRocket = sgMiddleClick.add(new BoolSetting.Builder()
         .name("silent-rocket")
         .description("Prevents hand swing animation when using rockets.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> preventGroundUsage = sgUtilities.add(new BoolSetting.Builder()
+    public final Setting<Boolean> preventGroundUsage = sgMiddleClick.add(new BoolSetting.Builder()
         .name("prevent-ground-usage")
-        .description("Blocks rocket usage while standing on ground.")
+        .description("Blocks rocket/pearl usage while on ground.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> antiAfk = sgUtilities.add(new BoolSetting.Builder()
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Settings — Miscellaneous
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public final Setting<Boolean> antiAfk = sgMisc.add(new BoolSetting.Builder()
         .name("anti-afk")
-        .description("Prevents being kicked for AFK by swinging your hand periodically.")
+        .description("Prevents AFK kick by swinging hand periodically.")
         .defaultValue(false)
         .build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // State
+    // Constants
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private static final double AFK_INTERVAL_SECONDS = 15.0;
+    private static final int AFK_INTERVAL_TICKS = 300; // 15 seconds
+    private static final int AFK_RANDOMNESS_TICKS = 120; // ±6 seconds
+    private static final int MIDDLE_CLICK_COOLDOWN = 5;
 
-    private boolean noReplacementWarned  = false;
-    private boolean noUsableElytraWarned = false;
-    private boolean wasMiddlePressed     = false;
-    private int     middleClickTimer     = 0;
-    private int     swingTimer           = 0;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // State — Auto Replace
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private boolean noReplacementWarned = false;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // State — Middle Click
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private boolean wasMiddlePressed = false;
+    private int middleClickCooldown = 0;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // State — Anti-AFK
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private int antiAfkTimer = 0;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
 
     public ElytraAssistant() {
-        super(HuntingUtilities.CATEGORY, "elytra-assistant", "Smart elytra & rocket management.");
+        super(HuntingUtilities.CATEGORY, "elytra-assistant", "Smart elytra and rocket management.");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -171,72 +195,58 @@ public class ElytraAssistant extends Module {
 
     @Override
     public void onActivate() {
-        noReplacementWarned  = false;
-        noUsableElytraWarned = false;
-        wasMiddlePressed     = false;
-        middleClickTimer     = 0;
-        swingTimer           = 0;
+        resetAutoReplaceState();
+        resetMiddleClickState();
+        resetAntiAfkState();
+    }
+
+    private void resetAutoReplaceState() {
+        noReplacementWarned = false;
+    }
+
+    private void resetMiddleClickState() {
+        wasMiddlePressed = false;
+        middleClickCooldown = 0;
+    }
+
+    private void resetAntiAfkState() {
+        antiAfkTimer = 0;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Event Handler
+    // Event Handlers
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
 
-        if (middleClickTimer > 0) middleClickTimer--;
-
-        if (middleClickAction.get() != MiddleClickAction.None) {
-            if (Input.isButtonPressed(GLFW.GLFW_MOUSE_BUTTON_MIDDLE)) {
-                if (!wasMiddlePressed && middleClickTimer == 0) {
-                    runMiddleClickAction();
-                    wasMiddlePressed = true;
-                    middleClickTimer = 5;
-                }
-            } else {
-                wasMiddlePressed = false;
-            }
-        }
-
-        if (antiAfk.get()) {
-            if (swingTimer <= 0) {
-                mc.player.swingHand(Hand.MAIN_HAND);
-                int base = (int) (AFK_INTERVAL_SECONDS * 20);
-                base += (int) ((Math.random() - 0.5) * (base * 0.4));
-                swingTimer = Math.max(1, base);
-            } else {
-                swingTimer--;
-            }
-        }
-
-        // Pause swapping if Mendbot is active to prevent conflicts
-        if (Modules.get().get(Mendbot.class).isActive()) return;
-
-        if (enableAutoSwap.get()) {
-            handleChestplateElytraSwitch();
-        }
+        handleMiddleClick();
+        handleAntiAfk();
+        handleAutoReplace();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Durability Logic
+    // Auto Replace Feature
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private void handleChestplateElytraSwitch() {
-        ItemStack chest = mc.player.getEquippedStack(EquipmentSlot.CHEST);
-        if (!chest.isOf(Items.ELYTRA)) return;
+    private void handleAutoReplace() {
+        if (!autoReplace.get()) return;
+        if (Modules.get().get(Mendbot.class).isActive()) return;
 
-        int remaining = chest.getMaxDamage() - chest.getDamage();
-        if (remaining > durabilityThreshold.get()) {
+        ItemStack chestplate = mc.player.getEquippedStack(EquipmentSlot.CHEST);
+        if (!chestplate.isOf(Items.ELYTRA)) return;
+
+        int remainingDurability = getRemainingDurability(chestplate);
+        if (remainingDurability > durabilityThreshold.get()) {
             noReplacementWarned = false;
             return;
         }
 
-        FindItemResult replacement = findUsableElytra();
+        FindItemResult replacement = findBestReplacementElytra();
         if (replacement.found()) {
-            silentEquip(replacement.slot());
-            warning("Elytra durability low! Swapping to fresh elytra.");
+            equipElytraSilently(replacement.slot());
+            warning("Elytra durability low! Replaced with fresh elytra.");
             mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
             noReplacementWarned = false;
         } else if (!noReplacementWarned) {
@@ -246,31 +256,127 @@ public class ElytraAssistant extends Module {
         }
     }
 
-    private FindItemResult findUsableElytra() {
-        int bestSlot       = -1;
+    private FindItemResult findBestReplacementElytra() {
+        int bestSlot = -1;
         int bestDurability = -1;
 
         for (int i = 0; i < mc.player.getInventory().main.size(); i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack.isEmpty() || !stack.isOf(Items.ELYTRA)) continue;
+            if (!isUsableElytra(stack)) continue;
 
-            int durability = stack.getMaxDamage() - stack.getDamage();
-            if (durability > durabilityThreshold.get() && durability > bestDurability) {
-                bestSlot       = i;
+            int durability = getRemainingDurability(stack);
+            if (durability > bestDurability) {
+                bestSlot = i;
                 bestDurability = durability;
             }
         }
 
-        if (bestSlot != -1) return new FindItemResult(bestSlot, mc.player.getInventory().getStack(bestSlot).getCount());
-        return new FindItemResult(-1, 0);
+        return bestSlot != -1
+            ? new FindItemResult(bestSlot, mc.player.getInventory().getStack(bestSlot).getCount())
+            : new FindItemResult(-1, 0);
     }
 
-    private void silentEquip(int slot) {
-        InvUtils.move().from(getSlotId(slot)).toArmor(2);
+    private boolean isUsableElytra(ItemStack stack) {
+        return !stack.isEmpty()
+            && stack.isOf(Items.ELYTRA)
+            && getRemainingDurability(stack) > durabilityThreshold.get();
     }
 
-    private int getSlotId(int slot) {
-        return (slot >= 0 && slot < 9) ? 36 + slot : slot;
+    private int getRemainingDurability(ItemStack elytra) {
+        return elytra.getMaxDamage() - elytra.getDamage();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Middle Click Feature
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void handleMiddleClick() {
+        if (middleClickCooldown > 0) middleClickCooldown--;
+
+        if (middleClickAction.get() == MiddleClickAction.None) return;
+        if (mc.currentScreen != null) return;
+
+        boolean isPressed = Input.isButtonPressed(GLFW.GLFW_MOUSE_BUTTON_MIDDLE);
+
+        if (isPressed && !wasMiddlePressed && middleClickCooldown == 0) {
+            executeMiddleClickAction();
+            wasMiddlePressed = true;
+            middleClickCooldown = MIDDLE_CLICK_COOLDOWN;
+        } else if (!isPressed) {
+            wasMiddlePressed = false;
+        }
+    }
+
+    private void executeMiddleClickAction() {
+        MiddleClickAction action = middleClickAction.get();
+
+        if (preventGroundUsage.get() && mc.player.isOnGround()) return;
+
+        ItemUsage target = switch (action) {
+            case Rocket -> new ItemUsage(Items.FIREWORK_ROCKET);
+            case Pearl  -> new ItemUsage(Items.ENDER_PEARL);
+            default     -> null;
+        };
+
+        if (target == null) return;
+        useItemFromInventory(target.item());
+    }
+
+    private void useItemFromInventory(net.minecraft.item.Item item) {
+        FindItemResult result = InvUtils.find(item);
+        if (!result.found()) return;
+
+        int slot = result.slot();
+        int previousSlot = mc.player.getInventory().selectedSlot;
+
+        if (isHotbarSlot(slot)) {
+            InvUtils.swap(slot, silentRocket.get());
+            mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+            InvUtils.swapBack();
+        } else {
+            InvUtils.move().from(slot).toHotbar(previousSlot);
+            InvUtils.swap(previousSlot, silentRocket.get());
+            mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+            InvUtils.swapBack();
+            InvUtils.move().from(previousSlot).to(slot);
+        }
+    }
+
+    private boolean isHotbarSlot(int slot) {
+        return slot >= 0 && slot < 9;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Anti-AFK Feature
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void handleAntiAfk() {
+        if (!antiAfk.get()) return;
+
+        if (antiAfkTimer <= 0) {
+            mc.player.swingHand(Hand.MAIN_HAND);
+            antiAfkTimer = calculateNextSwingDelay();
+        } else {
+            antiAfkTimer--;
+        }
+    }
+
+    private int calculateNextSwingDelay() {
+        int base = AFK_INTERVAL_TICKS;
+        int variance = (int) (Math.random() * AFK_RANDOMNESS_TICKS * 2) - AFK_RANDOMNESS_TICKS;
+        return Math.max(1, base + variance);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Inventory Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void equipElytraSilently(int slot) {
+        InvUtils.move().from(convertToInventorySlot(slot)).toArmor(2);
+    }
+
+    private int convertToInventorySlot(int hotbarSlot) {
+        return isHotbarSlot(hotbarSlot) ? 36 + hotbarSlot : hotbarSlot;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -286,59 +392,6 @@ public class ElytraAssistant extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Rocket / Middle Click Logic
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private void fireRocket() {
-        if (mc.player == null || mc.interactionManager == null) return;
-        if (preventGroundUsage.get() && mc.player.isOnGround()) return;
-
-        if (mc.player.getOffHandStack().isOf(Items.FIREWORK_ROCKET)) {
-            mc.interactionManager.interactItem(mc.player, Hand.OFF_HAND);
-            return;
-        }
-
-        FindItemResult rocketResult = InvUtils.findInHotbar(Items.FIREWORK_ROCKET);
-        if (rocketResult.found()) {
-            int prevSlot = mc.player.getInventory().selectedSlot;
-            InvUtils.swap(rocketResult.slot(), false);
-            mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-            InvUtils.swap(prevSlot, false);
-        }
-    }
-
-    private void runMiddleClickAction() {
-        if (mc.currentScreen != null) return;
-
-        MiddleClickAction action     = middleClickAction.get();
-        FindItemResult    itemResult = null;
-
-        if (action == MiddleClickAction.Rocket) {
-            if (preventGroundUsage.get() && mc.player.isOnGround()) return;
-            itemResult = InvUtils.find(Items.FIREWORK_ROCKET);
-        } else if (action == MiddleClickAction.Pearl) {
-            itemResult = InvUtils.find(Items.ENDER_PEARL);
-        }
-
-        if (itemResult == null || !itemResult.found()) return;
-
-        int slot     = itemResult.slot();
-        int prevSlot = mc.player.getInventory().selectedSlot;
-
-        if (slot < 9) {
-            InvUtils.swap(slot, true);
-            mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-            InvUtils.swapBack();
-        } else {
-            InvUtils.move().from(slot).toHotbar(prevSlot);
-            InvUtils.swap(prevSlot, true);
-            mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-            InvUtils.swapBack();
-            InvUtils.move().from(prevSlot).to(slot);
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Public API
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -350,7 +403,13 @@ public class ElytraAssistant extends Module {
         return isActive() && silentRocket.get();
     }
 
-    public boolean isAutoSwapEnabled() {
-        return isActive() && enableAutoSwap.get();
+    public boolean isAutoReplaceEnabled() {
+        return isActive() && autoReplace.get();
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Inner Classes
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private record ItemUsage(net.minecraft.item.Item item) {}
 }

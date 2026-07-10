@@ -1,9 +1,10 @@
 package com.example.addon.modules;
 
-import com.example.addon.HuntingUtilities;
-
 import java.util.HashSet;
 import java.util.Set;
+
+import com.example.addon.HuntingUtilities;
+
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
@@ -868,7 +869,7 @@ public class RocketPilot extends Module {
     private void handleElytraHealth() {
         boolean assistantHandling = false;
         ElytraAssistant assistant = Modules.get().get(ElytraAssistant.class);
-        if (assistant != null && assistant.isAutoSwapEnabled()) assistantHandling = true;
+        if (assistant != null && assistant.isAutoReplaceEnabled()) assistantHandling = true;
 
         if (!assistantHandling && getDurabilityPercent() <= ELYTRA_LOW_PERCENT) {
             Integer newDura = swapToFreshElytra();
