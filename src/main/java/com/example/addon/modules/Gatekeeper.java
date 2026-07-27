@@ -71,22 +71,28 @@ public class Gatekeeper extends Module {
     private final Setting<SettingColor> endGatewayColor = sgEndDimension.add(new ColorSetting.Builder()
         .name("end-gateway-color").defaultValue(new SettingColor(255, 0, 255, 255)).visible(scanEndGateways::get).build());
 
-    private final Setting<GateDetectionMode> brokenDetection = sgEndDimension.add(new EnumSetting.Builder<GateDetectionMode>()
-        .name("broken-gateways").description("How to handle broken/void-link gateways.").defaultValue(GateDetectionMode.Both).visible(scanEndGateways::get).build());
+    private final Setting<GateDetectionMode> anomalyDetection = sgEndDimension.add(new EnumSetting.Builder<GateDetectionMode>()
+        .name("anomalies")
+        .description("How to handle anomalous (broken or far-out) gateways.")
+        .defaultValue(GateDetectionMode.Both)
+        .visible(scanEndGateways::get)
+        .build());
 
-    private final Setting<SettingColor> brokenGatewayColor = sgEndDimension.add(new ColorSetting.Builder()
-        .name("broken-gateway-color").description("Color for gateways detected as broken.").defaultValue(new SettingColor(255, 0, 0, 255))
-        .visible(() -> brokenDetection.get() == GateDetectionMode.Highlight || brokenDetection.get() == GateDetectionMode.Both).build());
-
-    private final Setting<GateDetectionMode> farOutDetection = sgEndDimension.add(new EnumSetting.Builder<GateDetectionMode>()
-        .name("far-out-gateways").description("How to handle gateways pointing far from center.").defaultValue(GateDetectionMode.Both).visible(scanEndGateways::get).build());
-
-    private final Setting<SettingColor> farOutGatewayColor = sgEndDimension.add(new ColorSetting.Builder()
-        .name("far-out-color").description("Highlight color for far-out gateways.").defaultValue(new SettingColor(255, 0, 0, 255))
-        .visible(() -> farOutDetection.get() == GateDetectionMode.Highlight || farOutDetection.get() == GateDetectionMode.Both).build());
+    private final Setting<SettingColor> anomalyGatewayColor = sgEndDimension.add(new ColorSetting.Builder()
+        .name("anomaly-color")
+        .description("Highlight color for anomalous gateways.")
+        .defaultValue(new SettingColor(255, 0, 0, 255))
+        .visible(() -> anomalyDetection.get() == GateDetectionMode.Highlight || anomalyDetection.get() == GateDetectionMode.Both)
+        .build());
 
     private final Setting<Integer> farOutThreshold = sgEndDimension.add(new IntSetting.Builder()
-        .name("far-out-threshold").description("Blocks from center to flag as far-out.").defaultValue(5000).min(1000).sliderMax(100000).visible(() -> farOutDetection.get() != GateDetectionMode.Off).build());
+        .name("far-out-threshold")
+        .description("Blocks from center to flag as far-out.")
+        .defaultValue(5000)
+        .min(1000)
+        .sliderMax(100000)
+        .visible(() -> anomalyDetection.get() != GateDetectionMode.Off)
+        .build());
 
     // ── Render ─────────────────────────────────────────────────────
     private final Setting<ShapeMode> shapeMode = sgRender.add(new EnumSetting.Builder<ShapeMode>()
@@ -324,8 +330,8 @@ public class Gatekeeper extends Module {
                 if (be instanceof EndGatewayBlockEntity gateway) {
                     dest = ((EndGatewayBlockEntityAccessor) gateway).getExitPortalPos();
                     if (dest != null) {
-                        if (dest.getX() == 0 && dest.getZ() == 0 && brokenDetection.get() != GateDetectionMode.Off) gs = GatewayState.BROKEN;
-                        else if (Math.sqrt(dest.getSquaredDistance(0, 0, 0)) > farOutThreshold.get() && farOutDetection.get() != GateDetectionMode.Off) gs = GatewayState.FAR_OUT;
+                        if (dest.getX() == 0 && dest.getZ() == 0 && anomalyDetection.get() != GateDetectionMode.Off) gs = GatewayState.BROKEN;
+                        else if (Math.sqrt(dest.getSquaredDistance(0, 0, 0)) > farOutThreshold.get() && anomalyDetection.get() != GateDetectionMode.Off) gs = GatewayState.FAR_OUT;
                     }
                 }
             }
@@ -348,9 +354,9 @@ public class Gatekeeper extends Module {
     private void notifyGateway(BlockPos pos, BlockPos dest, GatewayState gs) {
         String id = "GW_" + pos.toShortString();
         if (!notifiedStructures.add(id)) return;
-        if (gs == GatewayState.BROKEN && (brokenDetection.get() == GateDetectionMode.Notify || brokenDetection.get() == GateDetectionMode.Both))
+        if (gs == GatewayState.BROKEN && (anomalyDetection.get() == GateDetectionMode.Notify || anomalyDetection.get() == GateDetectionMode.Both))
             warning("§d§lBroken Gateway §7detected (Void link)");
-        else if (gs == GatewayState.FAR_OUT && (farOutDetection.get() == GateDetectionMode.Notify || farOutDetection.get() == GateDetectionMode.Both))
+        else if (gs == GatewayState.FAR_OUT && (anomalyDetection.get() == GateDetectionMode.Notify || anomalyDetection.get() == GateDetectionMode.Both))
             warning("§c§lFar-Out Gateway §7detected");
         else info("§dEnd Gateway §7detected");
     }
@@ -401,8 +407,7 @@ public class Gatekeeper extends Module {
 
     // ── Utility Helpers ────────────────────────────────────────────
     private SettingColor getStructureColor(PortalStructure structure) {
-        if (structure.gatewayState == GatewayState.BROKEN) return brokenGatewayColor.get();
-        if (structure.gatewayState == GatewayState.FAR_OUT) return farOutGatewayColor.get();
+        if (structure.gatewayState == GatewayState.BROKEN || structure.gatewayState == GatewayState.FAR_OUT) return anomalyGatewayColor.get();
         if (dynamicColors.get()) {
             float hue = ( (structure.type == PortalType.END_PORTAL ? 0.333f : 0.667f) + (System.currentTimeMillis() % 3000) / 3000f) % 1f;
             int rgb = java.awt.Color.HSBtoRGB(hue, 0.8f, 1.0f);
@@ -427,8 +432,7 @@ public class Gatekeeper extends Module {
 
     public int getTotalEndPortals() { return (int) portalStructureMap.values().stream().filter(s -> s.type == PortalType.END_PORTAL).count(); }
     public int getTotalGateways()   { return (int) portalStructureMap.values().stream().filter(s -> s.type == PortalType.END_GATEWAY).count(); }
-    public int getBrokenGateways()  { return (int) portalStructureMap.values().stream().filter(s -> s.gatewayState == GatewayState.BROKEN).count(); }
-    public int getFarOutGateways()  { return (int) portalStructureMap.values().stream().filter(s -> s.gatewayState == GatewayState.FAR_OUT).count(); }
+    public int getAnomalousGateways()  { return (int) portalStructureMap.values().stream().filter(s -> s.gatewayState == GatewayState.BROKEN || s.gatewayState == GatewayState.FAR_OUT).count(); }
 
     // ── Inner Types ────────────────────────────────────────────────
     private enum PortalType { END_PORTAL, END_GATEWAY }

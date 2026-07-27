@@ -53,16 +53,9 @@ public class GatekeeperHUD extends HudElement {
         .build()
     );
 
-    private final Setting<Boolean> showBrokenGateways = sgGeneral.add(new BoolSetting.Builder()
-        .name("show-broken-gateways")
-        .description("Show the count of broken gateways (void links).")
-        .defaultValue(true)
-        .build()
-    );
-
-    private final Setting<Boolean> showFarOutGateways = sgGeneral.add(new BoolSetting.Builder()
-        .name("show-far-out-gateways")
-        .description("Show the count of far-out gateways (custom destinations).")
+    private final Setting<Boolean> showAnomalousGateways = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-anomalous-gateways")
+        .description("Show the count of anomalous gateways (broken or far-out).")
         .defaultValue(true)
         .build()
     );
@@ -174,7 +167,7 @@ public class GatekeeperHUD extends HudElement {
     public void render(HudRenderer renderer) {
         Gatekeeper tracker = Modules.get().get(Gatekeeper.class);
         if (tracker == null || !tracker.isActive()) { setSize(0, 0); return; }
-        if (!showEndPortals.get() && !showEndGateways.get() && !showBrokenGateways.get() && !showFarOutGateways.get()) { setSize(0, 0); return; }
+        if (!showEndPortals.get() && !showEndGateways.get() && !showAnomalousGateways.get()) { setSize(0, 0); return; }
 
         switch (layout.get()) {
             case Inline       -> renderInline(renderer, tracker);
@@ -191,10 +184,9 @@ public class GatekeeperHUD extends HudElement {
 
         record Stat(String label, String value, ItemStack icon) {}
         List<Stat> segments = new ArrayList<>();
-        if (showEndPortals.get())      segments.add(new Stat("End Portals: ", String.valueOf(tracker.getTotalEndPortals()), new ItemStack(Items.ENDER_EYE)));
-        if (showEndGateways.get())     segments.add(new Stat("Gateways: ",    String.valueOf(tracker.getTotalGateways()),    new ItemStack(Items.CHORUS_FLOWER)));
-        if (showBrokenGateways.get())  segments.add(new Stat("Broken: ",      String.valueOf(tracker.getBrokenGateways()),   new ItemStack(Items.BARRIER)));
-        if (showFarOutGateways.get())  segments.add(new Stat("Far-Out: ",    String.valueOf(tracker.getFarOutGateways()),   new ItemStack(Items.COMPASS)));
+        if (showEndPortals.get())         segments.add(new Stat("End Portals: ", String.valueOf(tracker.getTotalEndPortals()),    new ItemStack(Items.ENDER_EYE)));
+        if (showEndGateways.get())        segments.add(new Stat("Gateways: ",    String.valueOf(tracker.getTotalGateways()),       new ItemStack(Items.CHORUS_FLOWER)));
+        if (showAnomalousGateways.get())  segments.add(new Stat("Anomalous: ",   String.valueOf(tracker.getAnomalousGateways()),   new ItemStack(Items.BARRIER)));
         if (segments.isEmpty()) { setSize(0, 0); return; }
 
         double totalW = 0, rowH = showIcon ? Math.max(lh, iconSz) : lh;
@@ -243,10 +235,9 @@ public class GatekeeperHUD extends HudElement {
 
         record Data(String label, String value, ItemStack icon) {}
         List<Data> stats = new ArrayList<>();
-        if (showEndPortals.get())     stats.add(new Data(showText ? "End Portals: " : "", String.valueOf(tracker.getTotalEndPortals()), showIcon ? new ItemStack(Items.ENDER_EYE) : ItemStack.EMPTY));
-        if (showEndGateways.get())    stats.add(new Data(showText ? "Gateways: " : "",    String.valueOf(tracker.getTotalGateways()),    showIcon ? new ItemStack(Items.CHORUS_FLOWER) : ItemStack.EMPTY));
-        if (showBrokenGateways.get()) stats.add(new Data(showText ? "Broken: " : "",      String.valueOf(tracker.getBrokenGateways()),   showIcon ? new ItemStack(Items.BARRIER) : ItemStack.EMPTY));
-        if (showFarOutGateways.get()) stats.add(new Data(showText ? "Far-Out: " : "",    String.valueOf(tracker.getFarOutGateways()),   showIcon ? new ItemStack(Items.COMPASS) : ItemStack.EMPTY));
+        if (showEndPortals.get())        stats.add(new Data(showText ? "End Portals: " : "", String.valueOf(tracker.getTotalEndPortals()),    showIcon ? new ItemStack(Items.ENDER_EYE) : ItemStack.EMPTY));
+        if (showEndGateways.get())       stats.add(new Data(showText ? "Gateways: " : "",    String.valueOf(tracker.getTotalGateways()),       showIcon ? new ItemStack(Items.CHORUS_FLOWER) : ItemStack.EMPTY));
+        if (showAnomalousGateways.get()) stats.add(new Data(showText ? "Anomalous: " : "",  String.valueOf(tracker.getAnomalousGateways()),   showIcon ? new ItemStack(Items.BARRIER) : ItemStack.EMPTY));
         if (stats.isEmpty()) { setSize(0, 0); return; }
 
         double maxRowW = 0;

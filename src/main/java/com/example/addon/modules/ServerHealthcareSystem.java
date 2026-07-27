@@ -45,6 +45,12 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
+// Baritone imports
+import baritone.api.BaritoneAPI;
+import baritone.api.process.IBaritoneProcess;
+import baritone.api.process.PathingCommand;
+import baritone.api.process.PathingCommandType;
+
 public class ServerHealthcareSystem extends Module {
 
     // ── Setting Groups ────────────────────────────────────────────────────────
@@ -85,6 +91,14 @@ public class ServerHealthcareSystem extends Module {
         .description("Automatically equips the best armor in your inventory.")
         .defaultValue(true)
         .visible(() -> mode.get() == OperationMode.Default)
+        .build()
+    );
+
+    private final Setting<Boolean> ignoreHelmet = sgAutoArmor.add(new BoolSetting.Builder()
+        .name("ignore-helmet")
+        .description("Ignores the helmet slot when Auto Armor is enabled.")
+        .defaultValue(false)
+        .visible(() -> mode.get() == OperationMode.Default && autoArmor.get())
         .build()
     );
 
@@ -215,6 +229,14 @@ public class ServerHealthcareSystem extends Module {
         .build()
     );
 
+    private final Setting<Boolean> pauseBaritone = sgAutoEat.add(new BoolSetting.Builder()
+        .name("pause-baritone")
+        .description("Pauses Baritone while auto-eating to prevent it from interrupting or skipping meals.")
+        .defaultValue(true)
+        .visible(autoEat::get)
+        .build()
+    );
+
     // ── Safety ────────────────────────────────────────────────────────────────
 
     private final Setting<Boolean> disconnectOnTotemPop = sgSafety.add(new BoolSetting.Builder()
@@ -286,6 +308,13 @@ public class ServerHealthcareSystem extends Module {
     public ServerHealthcareSystem() {
         super(HuntingUtilities.CATEGORY, "server-healthcare-system",
             "SHS — Manages health, safety, tracking, and server monitoring.");
+        
+        // Register Baritone pause process safely
+        try {
+            BaritoneAPI.getProvider().getPrimaryBaritone().getPathingControlManager().registerProcess(EatProcess.INSTANCE);
+        } catch (NoClassDefFoundError | Exception ignored) {
+            // Baritone not present
+        }
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -510,6 +539,7 @@ public class ServerHealthcareSystem extends Module {
         for (int i = 0; i < 4; i++) {
             EquipmentSlot slot = slots[i];
             if (slot == EquipmentSlot.CHEST && chestplateMode.get() == ChestplateMode.Smart) continue;
+            if (slot == EquipmentSlot.HEAD && ignoreHelmet.get()) continue;
 
             ItemStack current   = mc.player.getEquippedStack(slot);
             int       bestValue = getArmorValue(current);
@@ -948,5 +978,35 @@ public class ServerHealthcareSystem extends Module {
         Chestplate,
         Elytra,
         Smart
+    }
+
+    // ── Baritone Pause Process ───────────────────────────────────────────────
+
+    public static class EatProcess implements IBaritoneProcess {
+        public static final EatProcess INSTANCE = new EatProcess();
+
+        @Override
+        public boolean isActive() {
+            ServerHealthcareSystem shs = Modules.get().get(ServerHealthcareSystem.class);
+            return shs != null && shs.isActive() && shs.isEating() && shs.pauseBaritone.get();
+        }
+
+        @Override
+        public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
+            return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+        }
+
+        @Override
+        public boolean isTemporary() {
+            return true;
+        }
+
+        @Override
+        public void onLostControl() {}
+
+        @Override
+        public String displayName0() {
+            return "SHS Auto Eat";
+        }
     }
 }

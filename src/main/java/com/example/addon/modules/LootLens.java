@@ -333,7 +333,7 @@ public class LootLens extends Module {
 
     private final Setting<Boolean> scanDecorative = sgDecorative.add(new BoolSetting.Builder()
         .name("decorative-blocks")
-        .description("Detect decorative containers: brewing stands, crafters, and decorated pots.")
+        .description("Detect decorative containers: brewing stands, crafters, chiseled bookshelves, and decorated pots.")
         .defaultValue(true)
         .onChanged(v -> { if (!v) removeContainersOfType(StorageType.DECORATIVE); }).build()
     );
@@ -549,6 +549,7 @@ public class LootLens extends Module {
                 || block == Blocks.DROPPER))                          return StorageType.UTILITY;
         if (scanDecorative.get() && (block == Blocks.BREWING_STAND
                 || block == Blocks.CRAFTER
+                || block == Blocks.CHISELED_BOOKSHELF
                 || block == Blocks.DECORATED_POT))                    return StorageType.DECORATIVE;
         return null;
     }
@@ -990,6 +991,7 @@ public class LootLens extends Module {
                 event.renderer.box(renderBox, withAlpha(baseColor, 0), baseColor, ShapeMode.Lines, 0);
             }
 
+            // Exclude common blocks like Utility, Decorative, and Ender Chests from beam spam
             if (type != StorageType.UTILITY && type != StorageType.DECORATIVE && type != StorageType.ENDER_CHEST) {
                 beamsToRender.add(new BeamData(renderBox, baseColor));
             }
@@ -1301,7 +1303,7 @@ public class LootLens extends Module {
                                 || block == Blocks.SMOKER  || block == Blocks.HOPPER
                                 || block == Blocks.DISPENSER || block == Blocks.DROPPER;
             case DECORATIVE     -> block == Blocks.BREWING_STAND || block == Blocks.CRAFTER
-                                || block == Blocks.DECORATED_POT;
+                                || block == Blocks.DECORATED_POT || block == Blocks.CHISELED_BOOKSHELF;
             case CHEST_MINECART -> true;
         };
     }

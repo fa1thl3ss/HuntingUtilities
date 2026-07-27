@@ -26,11 +26,13 @@ import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
+import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringListSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.Utils;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.render.NametagUtils;
@@ -105,6 +107,17 @@ public class SignScanner extends Module {
         public String toString() { return displayName; }
     }
 
+    public enum MessageProfile {
+        MESSAGE_1("Message 1"),
+        MESSAGE_2("Message 2");
+
+        private final String displayName;
+        MessageProfile(String name) { this.displayName = name; }
+
+        @Override
+        public String toString() { return displayName; }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — General
     // ═══════════════════════════════════════════════════════════════════════════
@@ -126,6 +139,41 @@ public class SignScanner extends Module {
         .description("Writes configured text on signs automatically when the edit screen opens.")
         .defaultValue(false).build());
 
+    private final Setting<MessageProfile> activeProfile = sgAutoSign.add(new EnumSetting.Builder<MessageProfile>()
+        .name("active-profile")
+        .description("Which message profile to use for Auto Sign.")
+        .defaultValue(MessageProfile.MESSAGE_1)
+        .visible(autoSign::get)
+        .build());
+
+    private final Setting<Keybind> switchProfileKey = sgAutoSign.add(new KeybindSetting.Builder()
+        .name("switch-profile-key")
+        .description("Press this key to swap between Message 1 and Message 2.")
+        .defaultValue(Keybind.none())
+        .visible(autoSign::get)
+        .action(() -> {
+            MessageProfile newProfile = activeProfile.get() == MessageProfile.MESSAGE_1 
+                ? MessageProfile.MESSAGE_2 
+                : MessageProfile.MESSAGE_1;
+            activeProfile.set(newProfile);
+            info("Switched Auto Sign profile to: " + newProfile.toString());
+        })
+        .build());
+
+    private final Setting<List<String>> message1Lines = sgAutoSign.add(new StringListSetting.Builder()
+        .name("message-1-lines")
+        .description("The text to put on the sign for Message 1 (up to 4 lines).")
+        .defaultValue(List.of("hello there,", "just a wander,", "- riths blahblah"))
+        .visible(() -> autoSign.get() && activeProfile.get() == MessageProfile.MESSAGE_1)
+        .build());
+
+    private final Setting<List<String>> message2Lines = sgAutoSign.add(new StringListSetting.Builder()
+        .name("message-2-lines")
+        .description("The text to put on the sign for Message 2 (up to 4 lines).")
+        .defaultValue(List.of("completely", "different", "message"))
+        .visible(() -> autoSign.get() && activeProfile.get() == MessageProfile.MESSAGE_2)
+        .build());
+
     private final Setting<Integer> editorDelay = sgAutoSign.add(new IntSetting.Builder()
         .name("editor-delay").description("Ticks to wait before submitting the sign.")
         .defaultValue(8).min(1)
@@ -143,11 +191,6 @@ public class SignScanner extends Module {
         .name("dye-color").description("Which color dye to apply to the sign.")
         .defaultValue(DyeColor.WHITE)
         .visible(() -> autoSign.get() && autoDye.get()).build());
-
-    private final Setting<List<String>> lines = sgAutoSign.add(new StringListSetting.Builder()
-        .name("lines").description("The text to put on the sign (up to 4 lines).")
-        .defaultValue("Hello", "World")
-        .visible(autoSign::get).build());
 
     private final Setting<Boolean> autoDate = sgAutoSign.add(new BoolSetting.Builder()
         .name("auto-date")
@@ -423,7 +466,11 @@ public class SignScanner extends Module {
 
         BlockPos pos = pendingSign.getPos();
 
-        List<String> configured = lines.get();
+        List<String> configured = switch (activeProfile.get()) {
+            case MESSAGE_1 -> message1Lines.get();
+            case MESSAGE_2 -> message2Lines.get();
+        };
+        
         String[] rows = new String[4];
         for (int i = 0; i < 4; i++) {
             rows[i] = (i < configured.size()) ? configured.get(i) : "";

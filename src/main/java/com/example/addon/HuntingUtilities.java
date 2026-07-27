@@ -3,6 +3,7 @@ package com.example.addon;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.addon.hud.BaromineHud;
 import com.example.addon.hud.DungeonAssistantHud;
 import com.example.addon.hud.DuraPanelHUD;
 import com.example.addon.hud.EightToOneHUD;
@@ -20,6 +21,7 @@ import com.example.addon.hud.SecondLifeHUD;
 import com.example.addon.hud.ServerReportHUD;
 import com.example.addon.hud.StatisticsInformation;
 import com.example.addon.hud.TimeThrottleHUD;
+import com.example.addon.modules.Baromine;
 import com.example.addon.modules.DungeonAssistant;
 import com.example.addon.modules.EightToOne;
 import com.example.addon.modules.ElytraAssistant;
@@ -64,6 +66,7 @@ public class HuntingUtilities extends MeteorAddon {
 
         // Modules
         Modules modules = Modules.get();
+        modules.add(new Baromine());
         modules.add(new DungeonAssistant());
         modules.add(new EightToOne());
         modules.add(new ElytraAssistant());
@@ -92,6 +95,7 @@ public class HuntingUtilities extends MeteorAddon {
         modules.add(new Tunnelers());
 
         // HUD elements
+        Hud.get().register(BaromineHud.INFO);
         Hud.get().register(DungeonAssistantHud.INFO);
         Hud.get().register(DuraPanelHUD.INFO);
         Hud.get().register(EightToOneHUD.INFO);

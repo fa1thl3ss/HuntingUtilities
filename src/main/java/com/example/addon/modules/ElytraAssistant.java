@@ -136,13 +136,6 @@ public class ElytraAssistant extends Module {
         .build()
     );
 
-    public final Setting<Boolean> preventGroundUsage = sgMiddleClick.add(new BoolSetting.Builder()
-        .name("prevent-ground-usage")
-        .description("Blocks rocket/pearl usage while on ground.")
-        .defaultValue(true)
-        .build()
-    );
-
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Miscellaneous
     // ═══════════════════════════════════════════════════════════════════════════
@@ -310,7 +303,8 @@ public class ElytraAssistant extends Module {
     private void executeMiddleClickAction() {
         MiddleClickAction action = middleClickAction.get();
 
-        if (preventGroundUsage.get() && mc.player.isOnGround()) return;
+        // Ground usage is always prevented while the module is enabled.
+        if (mc.player.isOnGround()) return;
 
         ItemUsage target = switch (action) {
             case Rocket -> new ItemUsage(Items.FIREWORK_ROCKET);
@@ -396,7 +390,7 @@ public class ElytraAssistant extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     public boolean shouldPreventRocketUse() {
-        return isActive() && preventGroundUsage.get() && mc.player.isOnGround();
+        return isActive() && mc.player.isOnGround();
     }
 
     public boolean shouldSilentRocket() {
