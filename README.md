@@ -5,6 +5,7 @@
 Currently in **BETA** — expect bugs, incomplete features, and frequent updates.
 
 Modules List;
+- Baromine
 - Dungeon Assistant
 - Eight To One
 - Elytra Assistant
@@ -33,6 +34,8 @@ Modules List;
 - Tunnelers
 
 Hud List;
+- Baromine Status
+- Motance
 - Portal Stock
 - Dungeon Assistant
 - Dura Panel
@@ -42,7 +45,6 @@ Hud List;
 - Inspector Gadget
 - Loot Lens
 - Mobanom
-- Motance
 - Neighbourhood Watch
 - Position
 - Rocket Pilot
