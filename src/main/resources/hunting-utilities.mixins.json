@@ -2,7 +2,7 @@
   "required": true,
   "refmap": "hunting-utilities.refmap.json",
   "package": "com.example.addon.mixin",
-  "compatibilityLevel": "JAVA_17",
+  "compatibilityLevel": "JAVA_21",
   "mixins": [
     "EndGatewayBlockEntityAccessor",
     "LavaMarkerMixin",
@@ -24,6 +24,8 @@
     "HeldItemRendererAccessor",
     "IMouseAccessor",
     "InGameHudMixin",
+    "DatamineMixin",
+    "InteractionAccessor",
     "LivingEntityRendererMixin",
     "MixinSignBlockEntityRenderer",
     "PlayerEntityRendererMixin",

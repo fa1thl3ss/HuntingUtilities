@@ -5,6 +5,7 @@ import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules; // Added import
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
@@ -518,6 +519,8 @@ public class Baromine extends Module {
     private int waterSafetyCounter = 0;
     private int waterMoveTicks = 0;
 
+    private boolean wasPausedForPortalMaker = false;
+
     // Safe Logout Variables
     private enum HideoutState {
         IDLE,
@@ -623,6 +626,7 @@ public class Baromine extends Module {
         antiAfkTickCounter = 0;
 
         safePosQueue.clear();
+        wasPausedForPortalMaker = false;
         
         if (mc.player != null) {
             startX = mc.player.getX();
@@ -653,12 +657,15 @@ public class Baromine extends Module {
         deepDarkState = DeepDarkState.IDLE;
         craftState = CraftState.IDLE;
         safePosQueue.clear();
+        wasPausedForPortalMaker = false;
         if (mc.options != null) {
             mc.options.jumpKey.setPressed(false);
             mc.options.forwardKey.setPressed(false);
         }
         if (BaritoneAPI.getProvider().getPrimaryBaritone().getPathingBehavior().isPathing()) {
-            BaritoneAPI.getProvider().getPrimaryBaritone().getCommandManager().execute("stop");
+            if (!Modules.get().isActive(PortalMaker.class)) {
+                BaritoneAPI.getProvider().getPrimaryBaritone().getCommandManager().execute("stop");
+            }
         }
         BaritoneAPI.getProvider().getPrimaryBaritone().getCommandManager().execute("set okIfWater false");
         sendPing("Baromine deactivated.");
@@ -691,6 +698,23 @@ public class Baromine extends Module {
         }
 
         if (mc.player == null || mc.world == null) return;
+
+        // Yield Baritone control to PortalMaker if it is active
+        if (Modules.get().isActive(PortalMaker.class)) {
+            if (!wasPausedForPortalMaker) {
+                wasPausedForPortalMaker = true;
+                BaritoneAPI.getProvider().getPrimaryBaritone().getCommandManager().execute("stop");
+            }
+            return;
+        }
+
+        if (wasPausedForPortalMaker) {
+            wasPausedForPortalMaker = false;
+            if (depositState == DepositState.IDLE && craftState == CraftState.IDLE && hideoutState == HideoutState.IDLE && deepDarkState == DeepDarkState.IDLE && !isAutoMending) {
+                sendPing("PortalMaker disabled. Resuming Baromine operations.");
+                updateBaritoneGoal();
+            }
+        }
 
         if (highlightContainerKey.get().isPressed() && craftState == CraftState.IDLE && depositState == DepositState.IDLE) {
             if (mc.crosshairTarget instanceof BlockHitResult hit) {
@@ -2545,6 +2569,7 @@ public class Baromine extends Module {
     private void updateBaritoneGoal(Block target) {
         if (!isActive()) return; 
         if (mc.player == null) return;
+        if (Modules.get().isActive(PortalMaker.class)) return; // Yield control to PortalMaker
 
         String blockId = Registries.BLOCK.getId(target).toString();
         StringBuilder mineCommand = new StringBuilder("mine ").append(blockId);
@@ -2659,6 +2684,7 @@ public class Baromine extends Module {
     }
 
     private void stopBaritoneSafely(String reason) {
+        if (Modules.get().isActive(PortalMaker.class)) return; // Don't stop if PortalMaker is using it
         BaritoneAPI.getProvider().getPrimaryBaritone().getCommandManager().execute("stop");
         sendPing("SAFETY STOP: " + reason);
     }

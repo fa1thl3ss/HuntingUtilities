@@ -53,7 +53,8 @@ public class Tunnelers extends Module {
      */
     public enum HighlightStyle {
         GLOW("Glow"),
-        SPECTRAL("Spectral");
+        SPECTRAL("Spectral"),
+        PULSE("Pulse");
 
         private final String displayName;
         HighlightStyle(String name) { this.displayName = name; }
@@ -132,7 +133,7 @@ public class Tunnelers extends Module {
 
     private final Setting<HighlightStyle> highlightStyle = sgGeneral.add(new EnumSetting.Builder<HighlightStyle>()
         .name("highlight-style")
-        .description("GLOW renders layered bloom around each box. SPECTRAL renders a crisp outline only, like the spectral arrow effect.")
+        .description("GLOW renders layered bloom around each box. SPECTRAL renders a crisp outline only. PULSE renders a fading bloom effect.")
         .defaultValue(HighlightStyle.GLOW)
         .build());
 
@@ -154,14 +155,14 @@ public class Tunnelers extends Module {
         .name("glow-layers")
         .description("Number of bloom layers rendered around each box.")
         .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> highlightStyle.get() == HighlightStyle.GLOW)
+        .visible(() -> highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE)
         .build());
 
     private final Setting<Double> glowSpread = sgGeneral.add(new DoubleSetting.Builder()
         .name("glow-spread")
         .description("How far each bloom layer expands outward (in blocks).")
         .defaultValue(0.05).min(0.01).sliderMax(0.2)
-        .visible(() -> highlightStyle.get() == HighlightStyle.GLOW)
+        .visible(() -> highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE)
         .build());
 
     private final Setting<Integer> glowBaseAlpha = sgGeneral.add(new IntSetting.Builder()
@@ -169,6 +170,29 @@ public class Tunnelers extends Module {
         .description("Alpha of the innermost glow layer (0-255).")
         .defaultValue(60).min(4).sliderMax(150)
         .visible(() -> highlightStyle.get() == HighlightStyle.GLOW)
+        .build());
+
+    // ── Pulse ────────────────────────────────────────────────────────────────
+
+    private final Setting<Double> pulseSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> highlightStyle.get() == HighlightStyle.PULSE)
+        .build());
+
+    private final Setting<Integer> pulseMinAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> highlightStyle.get() == HighlightStyle.PULSE)
+        .build());
+
+    private final Setting<Integer> pulseMaxAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> highlightStyle.get() == HighlightStyle.PULSE)
         .build());
 
     // ── Spectral ─────────────────────────────────────────────────────────────
@@ -1064,6 +1088,11 @@ public class Tunnelers extends Module {
             spectralPulseMultiplier = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(System.currentTimeMillis() / 750.0 * Math.PI));
         }
 
+        float pulseFactor = 0f;
+        if (style == HighlightStyle.PULSE) {
+            pulseFactor = getPulseFactor();
+        }
+
         double px = mc.player.getX();
         double py = mc.player.getY();
         double pz = mc.player.getZ();
@@ -1093,6 +1122,8 @@ public class Tunnelers extends Module {
 
             if (style == HighlightStyle.GLOW) {
                 renderGlowBox(event, box, reusable, fadeFrac, sm);
+            } else if (style == HighlightStyle.PULSE) {
+                renderPulseBox(event, box, reusable, fadeFrac, pulseFactor, sm);
             } else {
                 renderSpectralBox(event, box, reusable, fadeFrac, spectralPulseMultiplier, sm);
             }
@@ -1128,6 +1159,44 @@ public class Tunnelers extends Module {
 
         event.renderer.box(box.x1, box.y1, box.z1, box.x2, box.y2, box.z2,
             faded, faded, sm, 0);
+    }
+
+    // ------------------------------------------------------------------ //
+    //  Pulse rendering                                                     //
+    // ------------------------------------------------------------------ //
+
+    private void renderPulseBox(Render3DEvent event, MergedBox box,
+            SettingColor faded, float fadeFrac, float pulseFactor, ShapeMode sm) {
+
+        int maxA = (int)(pulseMaxAlpha.get() * fadeFrac);
+        int minA = (int)(pulseMinAlpha.get() * fadeFrac);
+        int pa = Math.min(255, Math.max(0, (int)(minA + (maxA - minA) * pulseFactor)));
+
+        SettingColor pColor = withAlpha(faded, pa);
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            event.renderer.box(
+                box.x1 - expansion, box.y1 - expansion, box.z1 - expansion,
+                box.x2 + expansion, box.y2 + expansion, box.z2 + expansion,
+                withAlpha(pColor, layerAlpha), withAlpha(pColor, 0),
+                ShapeMode.Sides, 0
+            );
+        }
+
+        event.renderer.box(box.x1, box.y1, box.z1, box.x2, box.y2, box.z2,
+            withAlpha(pColor, pa / 3), pColor, sm, 0);
+    }
+
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
     }
 
     // ------------------------------------------------------------------ //

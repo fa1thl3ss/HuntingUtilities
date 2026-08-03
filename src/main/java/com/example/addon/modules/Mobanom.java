@@ -57,7 +57,8 @@ public class Mobanom extends Module {
 
     public enum HighlightMode {
         Wireframe("Wireframe"),
-        Spectral("Spectral");
+        Spectral("Spectral"),
+        Pulse("Pulse");
 
         private final String title;
         HighlightMode(String title) { this.title = title; }
@@ -79,7 +80,7 @@ public class Mobanom extends Module {
 
     private final Setting<HighlightMode> highlightMode = sgGeneral.add(new EnumSetting.Builder<HighlightMode>()
         .name("highlight-mode")
-        .description("How anomalous mobs are outlined. Wireframe draws a box outline; Spectral uses the vanilla glow pipeline.")
+        .description("How anomalous mobs are outlined. Wireframe draws a box outline; Spectral uses the vanilla glow pipeline; Pulse uses a fading bloom effect.")
         .defaultValue(HighlightMode.Wireframe)
         .build()
     );
@@ -111,7 +112,7 @@ public class Mobanom extends Module {
         .name("glow-layers")
         .description("Number of bloom layers rendered around each mob.")
         .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> highlightMode.get() == HighlightMode.Wireframe)
+        .visible(() -> highlightMode.get() == HighlightMode.Wireframe || highlightMode.get() == HighlightMode.Pulse)
         .build()
     );
 
@@ -119,7 +120,7 @@ public class Mobanom extends Module {
         .name("glow-spread")
         .description("How far each bloom layer expands outward (in blocks).")
         .defaultValue(0.05).min(0.01).sliderMax(0.2)
-        .visible(() -> highlightMode.get() == HighlightMode.Wireframe)
+        .visible(() -> highlightMode.get() == HighlightMode.Wireframe || highlightMode.get() == HighlightMode.Pulse)
         .build()
     );
 
@@ -128,6 +129,30 @@ public class Mobanom extends Module {
         .description("Alpha of the innermost glow layer (0-255).")
         .defaultValue(60).min(10).sliderMax(150)
         .visible(() -> highlightMode.get() == HighlightMode.Wireframe)
+        .build()
+    );
+
+    private final Setting<Double> pulseSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> highlightMode.get() == HighlightMode.Pulse)
+        .build()
+    );
+
+    private final Setting<Integer> pulseMinAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> highlightMode.get() == HighlightMode.Pulse)
+        .build()
+    );
+
+    private final Setting<Integer> pulseMaxAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> highlightMode.get() == HighlightMode.Pulse)
         .build()
     );
 
@@ -379,6 +404,7 @@ public class Mobanom extends Module {
         if (mc.world == null || mc.player == null || highlightedEntities.isEmpty()) return;
 
         boolean wireframe = highlightMode.get() == HighlightMode.Wireframe;
+        boolean pulse = highlightMode.get() == HighlightMode.Pulse;
 
         for (Map.Entry<Integer, AnomalyType> entry : highlightedEntities.entrySet()) {
             Entity entity = mc.world.getEntityById(entry.getKey());
@@ -389,13 +415,15 @@ public class Mobanom extends Module {
             if (wireframe) {
                 renderGlowLayers(event, mob.getBoundingBox(), color);
                 event.renderer.box(mob.getBoundingBox(), withAlpha(color, 0), color, ShapeMode.Lines, 0);
+            } else if (pulse) {
+                renderPulseBox(event, mob.getBoundingBox(), color);
             }
             // Spectral: outline handled entirely by GlowingRegistry — nothing to draw here.
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Bloom
+    // Bloom & Pulse Rendering
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
@@ -408,6 +436,39 @@ public class Mobanom extends Module {
             int layerAlpha   = Math.max(4, (int)(baseAlpha * (1.0 - (double)(i - 1) / layers)));
             event.renderer.box(box.expand(expansion), withAlpha(color, layerAlpha), withAlpha(color, 0), ShapeMode.Sides, 0);
         }
+    }
+
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
+    }
+
+    private int applyPulse(int baseAlpha) {
+        float f = getPulseFactor();
+        int min = pulseMinAlpha.get();
+        int max = pulseMaxAlpha.get();
+        return Math.min(255, Math.max(0, (int)(min + (max - min) * f)));
+    }
+
+    private SettingColor pulseColor(SettingColor base) {
+        return withAlpha(base, applyPulse(base.a));
+    }
+
+    private void renderPulseBox(Render3DEvent event, Box box, SettingColor base) {
+        int pa = applyPulse(base.a);
+        SettingColor pColor = withAlpha(base, pa);
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            event.renderer.box(box.expand(expansion),
+                withAlpha(pColor, layerAlpha), withAlpha(pColor, 0), ShapeMode.Sides, 0);
+        }
+        event.renderer.box(box, withAlpha(pColor, pa / 3), pColor, ShapeMode.Both, 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

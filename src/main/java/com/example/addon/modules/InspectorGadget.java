@@ -11,6 +11,7 @@ import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
@@ -20,6 +21,11 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
+import baritone.api.BaritoneAPI;
+import baritone.api.IBaritone;
+import baritone.api.behavior.IPathingBehavior;
+import baritone.api.pathing.goals.GoalBlock;
+import baritone.api.process.IBaritoneProcess;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -42,6 +48,12 @@ import net.minecraft.util.math.Vec3d;
 public class InspectorGadget extends Module {
 
     public enum ScanState { SETUP, MOVING_TO_TILE, MOVING_TO_TARGET, OPENING_TARGET, WAITING, COOLDOWN, COMPLETE }
+
+    public enum HighlightMode {
+        GLOW,
+        SPECTRAL,
+        PULSE
+    }
 
     public enum StorageTarget {
         Chests("Chests", Blocks.CHEST, Blocks.TRAPPED_CHEST),
@@ -155,6 +167,74 @@ public class InspectorGadget extends Module {
         .build()
     );
 
+    // ── Visual Settings ──
+
+    private final Setting<HighlightMode> highlightMode = sgVisuals.add(new EnumSetting.Builder<HighlightMode>()
+        .name("highlight-mode")
+        .description("GLOW = layered bloom boxes. SPECTRAL = subtle fill and outline. PULSE = fading in/out bloom.")
+        .defaultValue(HighlightMode.GLOW)
+        .build()
+    );
+
+    private final Setting<Integer> glowLayers = sgVisuals.add(new IntSetting.Builder()
+        .name("glow-layers")
+        .defaultValue(4).min(1).sliderMax(8)
+        .visible(() -> highlightMode.get() == HighlightMode.GLOW || highlightMode.get() == HighlightMode.PULSE)
+        .build()
+    );
+
+    private final Setting<Double> glowSpread = sgVisuals.add(new DoubleSetting.Builder()
+        .name("glow-spread")
+        .defaultValue(0.05).min(0.01).sliderMax(0.2)
+        .visible(() -> highlightMode.get() == HighlightMode.GLOW || highlightMode.get() == HighlightMode.PULSE)
+        .build()
+    );
+
+    private final Setting<Integer> glowBaseAlpha = sgVisuals.add(new IntSetting.Builder()
+        .name("glow-base-alpha")
+        .defaultValue(60).min(4).sliderMax(150)
+        .visible(() -> highlightMode.get() == HighlightMode.GLOW)
+        .build()
+    );
+
+    private final Setting<Integer> spectralLineAlpha = sgVisuals.add(new IntSetting.Builder()
+        .name("spectral-line-alpha")
+        .defaultValue(255).min(0).sliderMax(255)
+        .visible(() -> highlightMode.get() == HighlightMode.SPECTRAL)
+        .build()
+    );
+
+    private final Setting<Integer> spectralFillAlpha = sgVisuals.add(new IntSetting.Builder()
+        .name("spectral-fill-alpha")
+        .defaultValue(30).min(0).sliderMax(255)
+        .visible(() -> highlightMode.get() == HighlightMode.SPECTRAL)
+        .build()
+    );
+
+    private final Setting<Double> pulseSpeed = sgVisuals.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> highlightMode.get() == HighlightMode.PULSE)
+        .build()
+    );
+
+    private final Setting<Integer> pulseMinAlpha = sgVisuals.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> highlightMode.get() == HighlightMode.PULSE)
+        .build()
+    );
+
+    private final Setting<Integer> pulseMaxAlpha = sgVisuals.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> highlightMode.get() == HighlightMode.PULSE)
+        .build()
+    );
+
     private final Setting<SettingColor> highlightColor = sgVisuals.add(new ColorSetting.Builder()
         .name("storage-color")
         .description("Color of the storage blocks found during scan.")
@@ -177,11 +257,9 @@ public class InspectorGadget extends Module {
     private int tileIndex = 0;
     private int targetIndex = 0;
     private int waitTimer = 0;
+    private int pathTimeout = 0;
+    private boolean issuedMoveCommand = false;
     
-    private double lastDistCheck = Double.MAX_VALUE;
-    private int stuckTimer = 0;
-    private Vec3d stuckDestination = null;
-
     private boolean wasAddPressed = false;
     private boolean wasStartPressed = false;
     private boolean wasClearPressed = false;
@@ -194,16 +272,8 @@ public class InspectorGadget extends Module {
     private int openedCount = 0;
     private int shulkerCount = 0;
 
-    private int antiAfkTimer = 0;
-    private float jitterYaw = 0;
-    private float jitterPitch = 0;
-    
-    // Obstacle avoidance state
-    private int strafeTimer = 0;
-    private int activeStrafe = 0; // 1 = left, -1 = right
-
     public InspectorGadget() {
-        super(HuntingUtilities.CATEGORY, "inspector-gadget", "Walks a custom path of tiles to scan nearby storage blocks.");
+        super(HuntingUtilities.CATEGORY, "inspector-gadget", "Walks a custom path of tiles to scan nearby storage blocks using Baritone.");
     }
 
     @Override
@@ -215,15 +285,8 @@ public class InspectorGadget extends Module {
         tileIndex = 0;
         targetIndex = 0;
         waitTimer = 0;
-        antiAfkTimer = 0;
-        jitterYaw = 0;
-        jitterPitch = 0;
-        strafeTimer = 0;
-        activeStrafe = 0;
-        
-        lastDistCheck = Double.MAX_VALUE;
-        stuckTimer = 0;
-        stuckDestination = null;
+        pathTimeout = 0;
+        issuedMoveCommand = false;
 
         wasAddPressed = false;
         wasStartPressed = false;
@@ -239,17 +302,9 @@ public class InspectorGadget extends Module {
 
     @Override
     public void onDeactivate() {
-        releaseKeys();
+        stopMovement();
         closeScreen();
         resetTargets();
-    }
-
-    private void releaseKeys() {
-        mc.options.forwardKey.setPressed(false);
-        mc.options.backKey.setPressed(false);
-        mc.options.leftKey.setPressed(false);
-        mc.options.rightKey.setPressed(false);
-        mc.options.jumpKey.setPressed(false);
     }
 
     private void closeScreen() {
@@ -286,13 +341,12 @@ public class InspectorGadget extends Module {
             if (pausePressed && !wasPausePressed) {
                 isPaused = !isPaused;
                 if (isPaused) {
-                    releaseKeys();
+                    stopMovement();
                     closeScreen();
                     info("Pathing Paused.");
                 } else {
-                    antiAfkTimer = 0;
-                    stuckTimer = 0;
-                    stuckDestination = null;
+                    pathTimeout = 0;
+                    issuedMoveCommand = false;
                     info("Pathing Resumed.");
                 }
             }
@@ -315,7 +369,8 @@ public class InspectorGadget extends Module {
                     currentState = ScanState.MOVING_TO_TILE;
                     tileIndex = 0;
                     visitedTargets.clear();
-                    antiAfkTimer = 0;
+                    pathTimeout = 0;
+                    issuedMoveCommand = false;
                     info("Starting pathing sequence for %d tiles.", pathTiles.size());
                 }
             }
@@ -358,11 +413,25 @@ public class InspectorGadget extends Module {
         }
 
         currentPathTarget = pathTiles.get(tileIndex);
-        Vec3d targetPos = Vec3d.ofCenter(currentPathTarget).add(0, 0.5, 0);
+        BlockPos standPos = currentPathTarget.up(); // Stand on top of the tile
+        Vec3d targetPos = Vec3d.ofCenter(standPos);
         double distance = mc.player.getPos().distanceTo(targetPos);
 
-        if (distance <= 1.2) {
-            releaseKeys();
+        pathTimeout++;
+        if (pathTimeout > 1000) { // 50 seconds timeout
+            warning("Timeout while pathing to tile. Skipping.");
+            tileIndex++;
+            currentPathTarget = null;
+            pathTimeout = 0;
+            issuedMoveCommand = false;
+            stopMovement();
+            return;
+        }
+
+        if (distance <= 1.5 && isBaritoneIdle()) {
+            stopMovement();
+            issuedMoveCommand = false;
+            pathTimeout = 0;
             populateLocalTargets();
 
             if (localTargets.isEmpty()) {
@@ -375,8 +444,10 @@ public class InspectorGadget extends Module {
                 currentState = ScanState.MOVING_TO_TARGET;
             }
         } else {
-            lookAndMove(targetPos);
-            checkMoveStuck(targetPos);
+            if (!issuedMoveCommand) {
+                pathToBlock(standPos);
+                issuedMoveCommand = true;
+            }
         }
     }
 
@@ -464,7 +535,8 @@ public class InspectorGadget extends Module {
                 } else {
                     // If we can't find a tile to stand on, but we are already close enough, just open it!
                     if (distanceToChest <= 4.2) {
-                        releaseKeys();
+                        stopMovement();
+                        issuedMoveCommand = false;
                         currentState = ScanState.OPENING_TARGET;
                         return;
                     }
@@ -477,60 +549,35 @@ public class InspectorGadget extends Module {
                 validTiles.sort(Comparator.comparingDouble(pos -> pos.getSquaredDistance(mc.player.getBlockPos())));
                 currentInteractTile = validTiles.get(0);
             }
-            
-            // Reset stuck tracking for new target
-            stuckTimer = 0;
-            stuckDestination = null;
+            pathTimeout = 0;
+            issuedMoveCommand = false;
         }
 
-        Vec3d targetPos = Vec3d.ofCenter(currentInteractTile).add(0, -0.5, 0);
+        Vec3d targetPos = Vec3d.ofCenter(currentInteractTile);
         double distanceToTile = mc.player.getPos().distanceTo(targetPos);
 
-        // If we are close enough to the tile OR we are within reach of the chest itself, open it.
-        if (distanceToTile <= 1.2 || distanceToChest <= 4.2) {
-            releaseKeys();
-            currentState = ScanState.OPENING_TARGET;
-        } else {
-            lookAndMove(targetPos);
-            checkMoveStuck(targetPos);
-        }
-    }
-
-    private void checkMoveStuck(Vec3d destination) {
-        // If we are chasing a new destination, reset the tracker
-        if (stuckDestination == null || !destination.equals(stuckDestination)) {
-            stuckDestination = destination;
-            lastDistCheck = mc.player.getPos().distanceTo(destination);
-            stuckTimer = 0;
+        pathTimeout++;
+        if (pathTimeout > 1000) { // 50 seconds timeout
+            warning("Timeout while pathing to target. Skipping.");
+            markVisited(blockTarget);
+            targetIndex++;
+            currentInteractTile = null;
+            pathTimeout = 0;
+            issuedMoveCommand = false;
+            stopMovement();
             return;
         }
 
-        stuckTimer++;
-
-        // Every 3 seconds (60 ticks), evaluate our progress
-        if (stuckTimer >= 60) {
-            double currentDist = mc.player.getPos().distanceTo(destination);
-            
-            // If we haven't gotten at least 1 block closer in 3 seconds, we are hard stuck
-            if (currentDist > lastDistCheck - 1.0) {
-                warning("Stuck while moving. Skipping.");
-                if (currentState == ScanState.MOVING_TO_TARGET) {
-                    markVisited(localTargets.get(targetIndex));
-                    targetIndex++;
-                    currentInteractTile = null;
-                } else if (currentState == ScanState.MOVING_TO_TILE) {
-                    tileIndex++;
-                    currentPathTarget = null;
-                    localTargets.clear();
-                }
-                releaseKeys();
-                strafeTimer = 0;
-                activeStrafe = 0;
-                stuckDestination = null; // Force reset
-            } else {
-                // We made progress, reset timer for the next 3 seconds
-                lastDistCheck = currentDist;
-                stuckTimer = 0;
+        // If we are close enough to the tile OR we are within reach of the chest itself, open it.
+        if (distanceToTile <= 1.5 || distanceToChest <= 4.2) {
+            stopMovement();
+            issuedMoveCommand = false;
+            pathTimeout = 0;
+            currentState = ScanState.OPENING_TARGET;
+        } else {
+            if (!issuedMoveCommand) {
+                pathToBlock(currentInteractTile);
+                issuedMoveCommand = true;
             }
         }
     }
@@ -606,7 +653,7 @@ public class InspectorGadget extends Module {
     }
 
     private void handleCompletion() {
-        releaseKeys();
+        stopMovement();
         resetTargets();
 
         CompletionSound soundSetting = completionSound.get();
@@ -624,123 +671,53 @@ public class InspectorGadget extends Module {
         this.toggle();
     }
 
-    // ─────────────────────────── Movement & Anti-AFK ───────────────────────────
+    // ─────────────────────────── Baritone Movement Engine ───────────────────────────
 
-    private void lookAndMove(Vec3d targetPos) {
-        Vec3d diff = targetPos.subtract(mc.player.getPos());
-        
-        // Use horizontal difference for stable yaw, preventing wavy side-to-side when looking straight up/down
-        double horDist = Math.sqrt(diff.x * diff.x + diff.z * diff.z);
-        float yaw;
-        if (horDist > 0.1) {
-            yaw = (float) Math.toDegrees(Math.atan2(-diff.x, diff.z));
-        } else {
-            // Keep current facing if looking almost directly up/down to prevent spinning
-            yaw = mc.player.getYaw();
+    private void pathToBlock(BlockPos standPos) {
+        if (standPos == null) return;
+        IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+        if (isBaritoneIdle()) {
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalBlock(standPos));
         }
-        
-        // Clamp pitch calculation to prevent NaN from slight floating point errors
-        double dist3d = diff.length();
-        float pitch = 0;
-        if (dist3d > 0) {
-            pitch = (float) -Math.toDegrees(Math.asin(Math.max(-1.0, Math.min(1.0, diff.y / dist3d))));
-        }
-
-        if (antiAfkTimer >= 40) {
-            jitterYaw = (float) (Math.random() * 4 - 2);
-            jitterPitch = (float) (Math.random() * 2 - 1);
-            antiAfkTimer = 0;
-        } else {
-            antiAfkTimer++;
-        }
-
-        mc.player.setYaw(yaw + jitterYaw);
-        mc.player.setHeadYaw(yaw + jitterYaw);
-        mc.player.setPitch(pitch + jitterPitch);
-
-        boolean shouldJump = false;
-        int strafe = 0; // 1 = left, -1 = right
-
-        BlockPos playerBlock = mc.player.getBlockPos();
-        Direction facing = mc.player.getHorizontalFacing();
-        
-        // Check blocks in front of the player
-        BlockPos frontFeet = playerBlock.offset(facing);
-        BlockState frontFeetState = mc.world.getBlockState(frontFeet);
-        boolean frontFeetBlocked = !frontFeetState.getCollisionShape(mc.world, frontFeet).isEmpty();
-        
-        BlockPos frontHead = playerBlock.up().offset(facing);
-        boolean frontHeadBlocked = !mc.world.getBlockState(frontHead).getCollisionShape(mc.world, frontHead).isEmpty();
-
-        // Prevent jumping onto storage blocks entirely. They should be treated as walls to strafe around.
-        boolean isStorageBlock = targetStorage.get().contains(frontFeetState.getBlock()) 
-            || frontFeetState.getBlock() instanceof ShulkerBoxBlock 
-            || frontFeetState.getBlock() == Blocks.ENDER_CHEST;
-
-        if (strafeTimer > 0) {
-            // We are currently strafing to bypass an obstacle
-            strafe = activeStrafe;
-            strafeTimer--;
-            
-            // If the front is finally clear, stop strafing early
-            if (!frontFeetBlocked && !frontHeadBlocked) {
-                strafeTimer = 0;
-                strafe = 0;
-            } else if (frontFeetBlocked && !frontHeadBlocked && !isStorageBlock) {
-                shouldJump = true; // Jump while strafing if there's a 1-block step
-            }
-        } else {
-            // No active strafe, check for new obstacles
-            if (frontFeetBlocked) {
-                if (!frontHeadBlocked && !isStorageBlock) {
-                    // 1-block step in front, just jump
-                    shouldJump = true;
-                } else {
-                    // Wall, chest, or 2-block high obstacle, determine strafe direction
-                    Direction leftDir = facing.rotateYCounterclockwise();
-                    Direction rightDir = facing.rotateYClockwise();
-
-                    BlockPos leftFeet = playerBlock.offset(leftDir);
-                    BlockPos leftHead = playerBlock.up().offset(leftDir);
-                    boolean leftBlocked = !mc.world.getBlockState(leftFeet).getCollisionShape(mc.world, leftFeet).isEmpty()
-                        || !mc.world.getBlockState(leftHead).getCollisionShape(mc.world, leftHead).isEmpty();
-
-                    BlockPos rightFeet = playerBlock.offset(rightDir);
-                    BlockPos rightHead = playerBlock.up().offset(rightDir);
-                    boolean rightBlocked = !mc.world.getBlockState(rightFeet).getCollisionShape(mc.world, rightFeet).isEmpty()
-                        || !mc.world.getBlockState(rightHead).getCollisionShape(mc.world, rightHead).isEmpty();
-
-                    if (!leftBlocked && rightBlocked) {
-                        strafe = 1; // Left is open
-                    } else if (leftBlocked && !rightBlocked) {
-                        strafe = -1; // Right is open
-                    } else if (!leftBlocked && !rightBlocked) {
-                        // Both open, pick the one closer to the target
-                        Vec3d leftPos = Vec3d.ofCenter(leftFeet);
-                        Vec3d rightPos = Vec3d.ofCenter(rightFeet);
-                        if (leftPos.distanceTo(targetPos) < rightPos.distanceTo(targetPos)) {
-                            strafe = 1;
-                        } else {
-                            strafe = -1;
-                        }
-                    } else {
-                        // Both blocked, flip direction to try the other way
-                        strafe = activeStrafe == 1 ? -1 : 1;
-                    }
-                    
-                    activeStrafe = strafe;
-                    strafeTimer = 15; // Strafe for 15 ticks (0.75s) to slide along the wall
-                }
-            }
-        }
-
-        // Apply movement keys
-        mc.options.forwardKey.setPressed(true);
-        mc.options.backKey.setPressed(false);
-        mc.options.leftKey.setPressed(strafe == 1);
-        mc.options.rightKey.setPressed(strafe == -1);
-        mc.options.jumpKey.setPressed(shouldJump);
     }
+
+    private void stopMovement() {
+        if (mc.options == null) return;
+        mc.options.forwardKey.setPressed(false);
+        mc.options.backKey.setPressed(false);
+        mc.options.leftKey.setPressed(false);
+        mc.options.rightKey.setPressed(false);
+        mc.options.jumpKey.setPressed(false);
+        mc.options.sprintKey.setPressed(false);
+        mc.options.sneakKey.setPressed(false);
+        
+        try {
+            IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+            IPathingBehavior pathing = baritone.getPathingBehavior();
+            if (pathing != null && (pathing.isPathing() || pathing.hasPath() || pathing.getInProgress().isPresent())) {
+                pathing.cancelEverything();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private boolean isBaritoneIdle() {
+        try {
+            IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+            IPathingBehavior pathing = baritone.getPathingBehavior();
+            if (pathing == null) return true;
+
+            boolean activeProcess = baritone.getPathingControlManager()
+                    .mostRecentInControl()
+                    .map(IBaritoneProcess::isActive)
+                    .orElse(false);
+
+            return !activeProcess && !pathing.isPathing() && !pathing.hasPath() && pathing.getInProgress().isEmpty();
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    // ─────────────────────────── Validation Helpers ───────────────────────────
 
     private boolean isStandable(BlockPos pos) {
         BlockState feet = mc.world.getBlockState(pos);
@@ -802,37 +779,107 @@ public class InspectorGadget extends Module {
         if (pathTiles.isEmpty() && localTargets.isEmpty()) return;
 
         SettingColor pColor = pathColor.get();
+        SettingColor cColor = highlightColor.get();
+        HighlightMode mode = highlightMode.get();
 
         for (int i = 0; i < pathTiles.size(); i++) {
             BlockPos pos = pathTiles.get(i);
 
-            // Flat decal highlighting for the tile
             Box flatTileBox = new Box(
                 pos.getX(), pos.getY() + 1.0, pos.getZ(),
                 pos.getX() + 1.0, pos.getY() + 1.02, pos.getZ() + 1.0
             );
-            event.renderer.box(flatTileBox, withAlpha(pColor, 60), pColor, ShapeMode.Sides, 0);
-
-            // Sequence pillar
+            
             double height = Math.min((i + 1) * 0.25, 3.0);
             Box pillarBox = new Box(
                 pos.getX() + 0.4, pos.getY() + 1.0, pos.getZ() + 0.4,
                 pos.getX() + 0.6, pos.getY() + 1.0 + height, pos.getZ() + 0.6
             );
-            event.renderer.box(pillarBox, withAlpha(pColor, 100), pColor, ShapeMode.Both, 0);
+
+            if (mode == HighlightMode.GLOW) {
+                renderGlowLayers(event, flatTileBox, pColor);
+                renderGlowLayers(event, pillarBox, pColor);
+                event.renderer.box(flatTileBox, withAlpha(pColor, 60), pColor, ShapeMode.Sides, 0);
+                event.renderer.box(pillarBox, withAlpha(pColor, 100), pColor, ShapeMode.Both, 0);
+            } else if (mode == HighlightMode.PULSE) {
+                renderPulseBox(event, flatTileBox, pColor);
+                renderPulseBox(event, pillarBox, pColor);
+            } else { // SPECTRAL
+                SettingColor lineC = withAlpha(pColor, spectralLineAlpha.get());
+                SettingColor fillC = withAlpha(pColor, spectralFillAlpha.get());
+                event.renderer.box(flatTileBox, fillC, lineC, ShapeMode.Both, 0);
+                event.renderer.box(pillarBox, fillC, lineC, ShapeMode.Both, 0);
+            }
         }
 
         if (currentState != ScanState.SETUP && !localTargets.isEmpty()) {
-            SettingColor cColor = highlightColor.get();
             for (BlockPos pos : localTargets) {
                 if (visitedTargets.contains(pos)) continue;
-                // Reverted chest rendering back to a full block outline
-                event.renderer.box(new Box(pos), new SettingColor(0, 0, 0, 0), cColor, ShapeMode.Lines, 0);
+                Box box = new Box(pos);
+                
+                if (mode == HighlightMode.GLOW) {
+                    renderGlowLayers(event, box, cColor);
+                    event.renderer.box(box, withAlpha(cColor, 0), cColor, ShapeMode.Lines, 0);
+                } else if (mode == HighlightMode.PULSE) {
+                    renderPulseBox(event, box, cColor);
+                } else { // SPECTRAL
+                    SettingColor lineC = withAlpha(cColor, spectralLineAlpha.get());
+                    SettingColor fillC = withAlpha(cColor, spectralFillAlpha.get());
+                    event.renderer.box(box, fillC, lineC, ShapeMode.Both, 0);
+                }
             }
         }
     }
 
+    // ── Render Helpers ──
+
+    private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        int baseAlpha = glowBaseAlpha.get();
+
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double t = (double)(i - 1) / layers;
+            int layerAlpha = Math.max(4, (int)(baseAlpha * (1.0 - t * t)));
+            event.renderer.box(box.expand(expansion), withAlpha(color, layerAlpha), withAlpha(color, 0), ShapeMode.Sides, 0);
+        }
+    }
+
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
+    }
+
+    private int applyPulse(int baseAlpha) {
+        float f = getPulseFactor();
+        int min = pulseMinAlpha.get();
+        int max = pulseMaxAlpha.get();
+        return Math.min(255, Math.max(0, (int)(min + (max - min) * f)));
+    }
+
+    private SettingColor pulseColor(SettingColor base) {
+        return withAlpha(base, applyPulse(base.a));
+    }
+
+    private void renderPulseBox(Render3DEvent event, Box box, SettingColor base) {
+        int pa = applyPulse(base.a);
+        SettingColor pColor = withAlpha(base, pa);
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            event.renderer.box(box.expand(expansion), withAlpha(pColor, layerAlpha), withAlpha(pColor, 0), ShapeMode.Sides, 0);
+        }
+        event.renderer.box(box, withAlpha(pColor, pa / 3), pColor, ShapeMode.Both, 0);
+    }
+
     private SettingColor withAlpha(SettingColor color, int alpha) {
-        return new SettingColor(color.r, color.g, color.b, alpha);
+        return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
     }
 }

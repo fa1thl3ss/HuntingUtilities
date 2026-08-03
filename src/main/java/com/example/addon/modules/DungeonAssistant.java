@@ -83,7 +83,8 @@ public class DungeonAssistant extends Module {
 
     public enum RenderMode {
         GLOW,
-        SPECTRAL
+        SPECTRAL,
+        PULSE
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -176,7 +177,7 @@ public class DungeonAssistant extends Module {
 
     private final Setting<RenderMode> renderMode = sgGeneral.add(new EnumSetting.Builder<RenderMode>()
         .name("render-mode")
-        .description("GLOW = layered bloom boxes. SPECTRAL = outline shader for entities, subtle fill for blocks.")
+        .description("GLOW = layered bloom boxes. SPECTRAL = outline shader for entities, subtle fill for blocks. PULSE = fading in/out highlight.")
         .defaultValue(RenderMode.GLOW)
         .onChanged(v -> rebuildSpectralRegistry())
         .build()
@@ -185,14 +186,14 @@ public class DungeonAssistant extends Module {
     private final Setting<Integer> glowLayers = sgGeneral.add(new IntSetting.Builder()
         .name("glow-layers").description("Number of bloom layers rendered around each target.")
         .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> renderMode.get() == RenderMode.GLOW)
+        .visible(() -> renderMode.get() == RenderMode.GLOW || renderMode.get() == RenderMode.PULSE)
         .build()
     );
 
     private final Setting<Double> glowSpread = sgGeneral.add(new DoubleSetting.Builder()
         .name("glow-spread").description("How far each bloom layer expands outward (in blocks).")
         .defaultValue(0.04).min(0.01).sliderMax(0.15)
-        .visible(() -> renderMode.get() == RenderMode.GLOW)
+        .visible(() -> renderMode.get() == RenderMode.GLOW || renderMode.get() == RenderMode.PULSE)
         .build()
     );
 
@@ -209,6 +210,27 @@ public class DungeonAssistant extends Module {
         .defaultValue(30).min(0).max(120).sliderMax(80)
         .visible(() -> renderMode.get() == RenderMode.SPECTRAL)
         .build()
+    );
+
+    private final Setting<Double> pulseSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMinAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMaxAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
     );
 
     private final Setting<Integer> beamWidth = sgGeneral.add(new IntSetting.Builder()
@@ -592,6 +614,7 @@ public class DungeonAssistant extends Module {
         if (mc.player == null || mc.world == null) return;
 
         boolean isSpectral = renderMode.get() == RenderMode.SPECTRAL;
+        boolean isPulse    = renderMode.get() == RenderMode.PULSE;
         Set<BlockPos> toRemove = new HashSet<>();
 
         for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
@@ -621,6 +644,8 @@ public class DungeonAssistant extends Module {
                     
                     if (isSpectral) {
                         event.renderer.box(beamBox, withAlpha(color, 20), withAlpha(color, 180), ShapeMode.Both, 0);
+                    } else if (isPulse) {
+                        renderPulseBox(event, beamBox, color);
                     } else {
                         renderGlowLayers(event, beamBox, color);
                         event.renderer.box(beamBox, withAlpha(color, 60), color, ShapeMode.Both, 0);
@@ -646,6 +671,8 @@ public class DungeonAssistant extends Module {
                 int fillAlpha = (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) ? 0 : spectralBlockFillAlpha.get();
                 int outlineAlpha = (type == TargetType.CHEST_MINECART || type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) ? 200 : 0;
                 event.renderer.box(renderBox, withAlpha(color, fillAlpha), withAlpha(color, outlineAlpha), ShapeMode.Sides, 0);
+            } else if (isPulse) {
+                renderPulseBox(event, renderBox, color);
             } else {
                 renderGlowLayers(event, renderBox, color);
                 event.renderer.box(renderBox, withAlpha(color, 0), color, ShapeMode.Lines, 0);
@@ -664,6 +691,8 @@ public class DungeonAssistant extends Module {
                 
                 if (isSpectral) {
                     event.renderer.box(torchBox, withAlpha(torchColor, spectralBlockFillAlpha.get()), withAlpha(torchColor, 0), ShapeMode.Sides, 0);
+                } else if (isPulse) {
+                    renderPulseBox(event, torchBox, torchColor);
                 } else {
                     renderGlowLayers(event, torchBox, torchColor);
                     event.renderer.box(torchBox, withAlpha(torchColor, 0), torchColor, ShapeMode.Lines, 0);
@@ -686,6 +715,9 @@ public class DungeonAssistant extends Module {
                 if (isSpectral) {
                     event.renderer.box(endermite.getBoundingBox(), withAlpha(color, 0), withAlpha(color, 200), ShapeMode.Lines, 0);
                     event.renderer.box(beamBox, withAlpha(color, 20), withAlpha(color, 180), ShapeMode.Both, 0);
+                } else if (isPulse) {
+                    renderPulseBox(event, endermite.getBoundingBox(), color);
+                    renderPulseBox(event, beamBox, color);
                 } else {
                     renderGlowLayers(event, endermite.getBoundingBox(), color);
                     event.renderer.box(endermite.getBoundingBox(), withAlpha(color, 0), color, ShapeMode.Lines, 0);
@@ -703,6 +735,8 @@ public class DungeonAssistant extends Module {
 
                 if (isSpectral) {
                     event.renderer.box(orbBox, withAlpha(color, 0), withAlpha(color, 200), ShapeMode.Lines, 0);
+                } else if (isPulse) {
+                    renderPulseBox(event, orbBox, color);
                 } else {
                     renderGlowLayers(event, orbBox, color);
                     event.renderer.box(orbBox, withAlpha(color, 0), color, ShapeMode.Lines, 0);
@@ -749,7 +783,7 @@ public class DungeonAssistant extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Bloom Rendering
+    // Bloom & Pulse Rendering
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
@@ -767,6 +801,39 @@ public class DungeonAssistant extends Module {
                 ShapeMode.Sides, 0
             );
         }
+    }
+
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
+    }
+
+    private int applyPulse(int baseAlpha) {
+        float f = getPulseFactor();
+        int min = pulseMinAlpha.get();
+        int max = pulseMaxAlpha.get();
+        return Math.min(255, Math.max(0, (int)(min + (max - min) * f)));
+    }
+
+    private SettingColor pulseColor(SettingColor base) {
+        return withAlpha(base, applyPulse(base.a));
+    }
+
+    private void renderPulseBox(Render3DEvent event, Box box, SettingColor base) {
+        int pa = applyPulse(base.a);
+        SettingColor pColor = withAlpha(base, pa);
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            event.renderer.box(box.expand(expansion),
+                withAlpha(pColor, layerAlpha), withAlpha(pColor, 0), ShapeMode.Sides, 0);
+        }
+        event.renderer.box(box, withAlpha(pColor, pa / 3), pColor, ShapeMode.Both, 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1450,7 +1517,7 @@ public class DungeonAssistant extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Pruning
-    // ═══════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void pruneBlockTargets() {
         if (mc.world == null || mc.player == null) return;
@@ -1552,9 +1619,9 @@ public class DungeonAssistant extends Module {
             pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0);
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // Color Helpers
-    // ═════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private SettingColor withAlpha(SettingColor color, int alpha) {
         return new SettingColor(color.r, color.g, color.b, Math.min(255, Math.max(0, alpha)));
@@ -1592,9 +1659,9 @@ public class DungeonAssistant extends Module {
         };
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // State Reset Helpers
-    // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void resetSoftState() {
         wasAutoOpened                  = false;
@@ -1608,9 +1675,9 @@ public class DungeonAssistant extends Module {
         hasPlayedSoundForCurrentScreen = false;
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // Utility Helpers
-    // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void restoreSlot() {
         if (silentMode.get() && previousSlot >= 0 && mc.player != null) {
@@ -1642,9 +1709,9 @@ public class DungeonAssistant extends Module {
         return (int) Math.max(1, Math.round(baseDelay * (1.0 + (Math.random() - 0.5) * 0.8)));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // Public API
-    // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     public boolean shouldShowStealDumpButtons() {
         return isActive() && stealDumpButtons.get();

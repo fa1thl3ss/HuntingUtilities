@@ -1,18 +1,14 @@
 package com.example.addon.modules;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import com.example.addon.HuntingUtilities;
+import com.example.addon.utils.GlowingRegistry;
 
-import meteordevelopment.meteorclient.renderer.text.TextRenderer;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
-import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -21,25 +17,18 @@ import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
-import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringListSetting;
 import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.utils.render.NametagUtils;
-import meteordevelopment.meteorclient.utils.misc.Keybind;
-import meteordevelopment.meteorclient.utils.render.color.Color;
+import meteordevelopment.meteorclient.utils.render.WireframeEntityRenderer;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
-import org.joml.Vector3d;
 
 public class NeighbourhoodWatch extends Module {
 
@@ -53,17 +42,18 @@ public class NeighbourhoodWatch extends Module {
     public enum TabFilter  { Friends, Enemies, Proxies, Others, All }
     public enum FilterMode { Censor, AutoIgnore }
 
-    public enum LogoutRenderMode {
-        FullBox,
-        FlatCap,
-        Both,
-        None
-    }
+    /**
+     * Wireframe — custom geometry outline drawn by WireframeEntityRenderer.
+     * Spectral  — vanilla glowing outline driven by GlowingRegistry → EntityGlowingMixin pipeline.
+     */
+    public enum HighlightMode {
+        Wireframe("Wireframe"),
+        Spectral("Spectral");
 
-    public enum CoordVisibility {
-        Visible,
-        Censored,
-        Hidden
+        private final String title;
+        HighlightMode(String title) { this.title = title; }
+
+        @Override public String toString() { return title; }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -71,11 +61,9 @@ public class NeighbourhoodWatch extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private final SettingGroup sgSafety      = settings.createGroup("Safety");
-    private final SettingGroup sgLogout      = settings.createGroup("Logout Tracking");
     private final SettingGroup sgMsgControl  = settings.createGroup("Message Control");
     private final SettingGroup sgTracking    = settings.createGroup("Player Tracking");
     private final SettingGroup sgFriends     = settings.createGroup("Friends & Enemies");
-    private final SettingGroup sgPrivacy     = settings.createGroup("Privacy");
     private final SettingGroup sgTabList     = settings.createGroup("Tab List Monitoring");
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -114,65 +102,6 @@ public class NeighbourhoodWatch extends Module {
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Logout Tracking
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private final Setting<Boolean> trackLogouts = sgLogout.add(new BoolSetting.Builder()
-        .name("track-logouts")
-        .description("Remembers where players log out nearby.")
-        .defaultValue(true)
-        .build()
-    );
-
-    private final Setting<LogoutRenderMode> logoutRenderMode = sgLogout.add(new EnumSetting.Builder<LogoutRenderMode>()
-        .name("render-mode")
-        .description("How the logout spot is visualized in the 3D world.")
-        .defaultValue(LogoutRenderMode.FullBox)
-        .visible(trackLogouts::get)
-        .build()
-    );
-
-    private final Setting<SettingColor> logoutColor = sgLogout.add(new ColorSetting.Builder()
-        .name("logout-color")
-        .description("Color for the logout spot markers and nametags.")
-        .defaultValue(new SettingColor(255, 40, 40, 150))
-        .visible(trackLogouts::get)
-        .build()
-    );
-
-    private final Setting<Double> logoutNametagScale = sgLogout.add(new DoubleSetting.Builder()
-        .name("nametag-scale")
-        .description("Scale of the floating text above the logout spot.")
-        .defaultValue(1.5).min(0.5).sliderMax(3.0)
-        .visible(trackLogouts::get)
-        .build()
-    );
-
-    private final Setting<Integer> logoutCleanupMinutes = sgLogout.add(new IntSetting.Builder()
-        .name("cleanup-minutes")
-        .description("Auto-remove logout spots after X minutes.")
-        .defaultValue(15).min(1).sliderMax(60)
-        .visible(trackLogouts::get)
-        .build()
-    );
-
-    private final Setting<Integer> maxLogouts = sgLogout.add(new IntSetting.Builder()
-        .name("max-logouts")
-        .description("Maximum number of logout spots to keep.")
-        .defaultValue(10).min(1).sliderMax(50)
-        .visible(trackLogouts::get)
-        .build()
-    );
-
-    private final Setting<Keybind> clearLogoutsKey = sgLogout.add(new KeybindSetting.Builder()
-        .name("clear-logouts-key")
-        .description("Keybind to manually clear all tracked logout spots.")
-        .defaultValue(Keybind.none())
-        .action(this::clearLogouts)
-        .build()
-    );
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Message Control
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -185,23 +114,8 @@ public class NeighbourhoodWatch extends Module {
 
     private final Setting<List<String>> ignoreKeywords = sgMsgControl.add(new StringListSetting.Builder()
         .name("keywords")
-        .description("Words to act on. Censor mode redacts them; AutoIgnore mode silences the sender.")
+        .description("Words to act on. Censor mode redacts them; AutoIgnore mode silences the sender. Case-insensitive.")
         .defaultValue(List.of())
-        .build()
-    );
-
-    private final Setting<Boolean> ignoreCaseSensitive = sgMsgControl.add(new BoolSetting.Builder()
-        .name("case-sensitive")
-        .description("Match keywords with case sensitivity.")
-        .defaultValue(false)
-        .build()
-    );
-
-    private final Setting<Boolean> ignoreNotify = sgMsgControl.add(new BoolSetting.Builder()
-        .name("notify")
-        .description("Print a local message when a player is auto-ignored (AutoIgnore mode only).")
-        .defaultValue(true)
-        .visible(() -> filterMode.get() == FilterMode.AutoIgnore)
         .build()
     );
 
@@ -254,32 +168,19 @@ public class NeighbourhoodWatch extends Module {
 
     // ── Highlight rendering ───────────────────────────────────────────────────
 
-    private final Setting<Boolean> glowEnabled = sgTracking.add(new BoolSetting.Builder()
-        .name("glow")
-        .description("Render a bloom halo around each tracked player in addition to the outline.")
-        .defaultValue(true)
+    private final Setting<HighlightMode> highlightMode = sgTracking.add(new EnumSetting.Builder<HighlightMode>()
+        .name("highlight-mode")
+        .description("Wireframe draws custom geometry. Spectral uses the vanilla glow pipeline.")
+        .defaultValue(HighlightMode.Wireframe)
         .visible(trackPlayers::get)
         .build()
     );
 
-    private final Setting<Integer> glowLayers = sgTracking.add(new IntSetting.Builder()
-        .name("glow-layers").description("Number of bloom layers rendered around each player.")
-        .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> trackPlayers.get() && glowEnabled.get())
-        .build()
-    );
-
-    private final Setting<Double> glowSpread = sgTracking.add(new DoubleSetting.Builder()
-        .name("glow-spread").description("How far each bloom layer expands outward (in blocks).")
-        .defaultValue(0.05).min(0.01).sliderMax(0.2)
-        .visible(() -> trackPlayers.get() && glowEnabled.get())
-        .build()
-    );
-
-    private final Setting<Integer> glowBaseAlpha = sgTracking.add(new IntSetting.Builder()
-        .name("glow-base-alpha").description("Alpha of the innermost glow layer (0-255).")
-        .defaultValue(60).min(10).sliderMax(150)
-        .visible(() -> trackPlayers.get() && glowEnabled.get())
+    private final Setting<Double> outlineScale = sgTracking.add(new DoubleSetting.Builder()
+        .name("outline-scale")
+        .description("Scale of the wireframe outline (Wireframe mode only). 1.0 = exact model size.")
+        .defaultValue(1.02).min(1.0).sliderMax(2.0)
+        .visible(() -> trackPlayers.get() && highlightMode.get() == HighlightMode.Wireframe)
         .build()
     );
 
@@ -335,17 +236,6 @@ public class NeighbourhoodWatch extends Module {
         .build()
     );
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Privacy
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private final Setting<CoordVisibility> coordVisibility = sgPrivacy.add(new EnumSetting.Builder<CoordVisibility>()
-        .name("coord-visibility")
-        .description("Controls how coordinates are displayed in chat and HUD.")
-        .defaultValue(CoordVisibility.Visible)
-        .build()
-    );
-
     // ── Others ────────────────────────────────────────────────────────────────
 
     private final Setting<SettingColor> otherColor = sgFriends.add(new ColorSetting.Builder()
@@ -359,33 +249,23 @@ public class NeighbourhoodWatch extends Module {
     // Settings — Tab List Monitoring
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private final Setting<Boolean> monitorTabList = sgTabList.add(new BoolSetting.Builder()
-        .name("monitor-tab-list")
-        .description("Notifies when players join or leave the server via the tab list.")
-        .defaultValue(false).build()
-    );
-
     private final Setting<TabEvent> tabEvent = sgTabList.add(new EnumSetting.Builder<TabEvent>()
         .name("event")
         .description("Which tab-list event to notify on.")
-        .defaultValue(TabEvent.Join)
-        .visible(monitorTabList::get)
+        .defaultValue(TabEvent.Both)
         .build()
     );
 
     private final Setting<TabFilter> tabFilter = sgTabList.add(new EnumSetting.Builder<TabFilter>()
         .name("notify-for")
         .description("Which player category triggers a notification.")
-        .defaultValue(TabFilter.Enemies)
-        .visible(monitorTabList::get)
+        .defaultValue(TabFilter.All)
         .build()
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
     // State
     // ═══════════════════════════════════════════════════════════════════════════
-
-    public record LogoutRecord(String name, Vec3d pos, long time, String dimension) {}
 
     private final Set<Integer> notifiedPlayers    = new HashSet<>();
     private final Set<Integer> activelyOutlined   = new HashSet<>();
@@ -394,9 +274,6 @@ public class NeighbourhoodWatch extends Module {
     private final Set<String>  friendSet          = new HashSet<>();
     private final Set<String>  enemySet           = new HashSet<>();
     private final Set<String>  proxySet           = new HashSet<>();
-
-    private final Map<String, Vec3d> lastKnownPos = new HashMap<>();
-    private final List<LogoutRecord> logouts      = new ArrayList<>();
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -414,7 +291,6 @@ public class NeighbourhoodWatch extends Module {
     @Override
     public void onActivate() {
         resetState();
-        logouts.clear();
         updateFriendEnemySets();
         if (mc.player != null && mc.player.networkHandler != null) {
             mc.player.networkHandler.getPlayerList().forEach(entry -> {
@@ -433,7 +309,6 @@ public class NeighbourhoodWatch extends Module {
     @EventHandler
     private void onGameJoined(GameJoinedEvent event) {
         clearAllOutlines();
-        logouts.clear();
         resetState();
     }
 
@@ -447,27 +322,11 @@ public class NeighbourhoodWatch extends Module {
 
         if (tickDisconnectOnPlayer()) return;
         tickPlayerTracking();
-
-        if (trackLogouts.get()) {
-            // Update last known positions for logout tracking
-            lastKnownPos.clear();
-            for (PlayerEntity player : mc.world.getPlayers()) {
-                if (player == mc.player) continue;
-                lastKnownPos.put(player.getName().getString(), player.getPos());
-            }
-
-            // Auto cleanup
-            long cutoff = System.currentTimeMillis() - (logoutCleanupMinutes.get() * 60000L);
-            if (logouts.removeIf(r -> r.time < cutoff)) {
-                // Trigger HUD update if needed
-            }
-        }
-
         tickOutlineShader();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Outline management
+    // Outline management (Spectral / GlowingRegistry)
     // ═══════════════════════════════════════════════════════════════════════════
 
     private void tickOutlineShader() {
@@ -476,6 +335,7 @@ public class NeighbourhoodWatch extends Module {
             return;
         }
 
+        boolean spectral = highlightMode.get() == HighlightMode.Spectral;
         Set<Integer> newlyActive = new HashSet<>();
 
         for (PlayerEntity player : mc.world.getPlayers()) {
@@ -493,26 +353,23 @@ public class NeighbourhoodWatch extends Module {
             };
             if (!shouldHighlight) continue;
 
-            SettingColor color = switch (status) {
-                case Friend -> friendColor.get();
-                case Enemy  -> enemyColor.get();
-                case Proxy  -> proxyColor.get();
-                case Other  -> otherColor.get();
-            };
-
-            player.setGlowing(true);
-            applyOutlineColor(player, color);
+            if (spectral) {
+                SettingColor color = switch (status) {
+                    case Friend -> friendColor.get();
+                    case Enemy  -> enemyColor.get();
+                    case Proxy  -> proxyColor.get();
+                    case Other  -> otherColor.get();
+                };
+                GlowingRegistry.add(player.getId(), (255 << 24) | (color.r << 16) | (color.g << 8) | color.b);
+            }
+            
             newlyActive.add(player.getId());
         }
 
-        // Remove glow from players no longer tracked
+        // Clean up previously outlined players that are no longer tracked (or if we switched to Wireframe)
         for (int id : activelyOutlined) {
-            if (!newlyActive.contains(id)) {
-                Entity e = mc.world.getEntityById(id);
-                if (e != null) {
-                    e.setGlowing(false);
-                    removeOutlineColor(e);
-                }
+            if (!newlyActive.contains(id) || !spectral) {
+                GlowingRegistry.remove(id);
             }
         }
 
@@ -521,15 +378,15 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Render 3D — bloom halo
+    // Render 3D — wireframe outline
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
 
-        // ── Render Tracked Players ──
-        if (glowEnabled.get() && trackPlayers.get()) {
+        // ── Render Tracked Players (Wireframe) ──
+        if (trackPlayers.get() && highlightMode.get() == HighlightMode.Wireframe) {
             for (PlayerEntity player : mc.world.getPlayers()) {
                 if (!activelyOutlined.contains(player.getId())) continue;
 
@@ -542,64 +399,11 @@ public class NeighbourhoodWatch extends Module {
                     case Other  -> otherColor.get();
                 };
 
-                renderGlowLayers(event, player.getBoundingBox(), color);
-            }
-        }
-
-        // ── Render Logout Spots ──
-        if (trackLogouts.get() && logoutRenderMode.get() != LogoutRenderMode.None) {
-            String currentDim = mc.world.getRegistryKey().getValue().toString();
-            LogoutRenderMode mode = logoutRenderMode.get();
-            SettingColor color = logoutColor.get();
-
-            for (LogoutRecord record : logouts) {
-                if (!record.dimension().equals(currentDim)) continue;
-
-                // Draw Visuals
-                if (mode == LogoutRenderMode.FullBox || mode == LogoutRenderMode.Both) {
-                    Box box = new Box(record.pos().x - 0.3, record.pos().y, record.pos().z - 0.3, record.pos().x + 0.3, record.pos().y + 1.8, record.pos().z + 0.3);
-                    event.renderer.box(box, color, color, ShapeMode.Both, 0);
-                }
-
-                if (mode == LogoutRenderMode.FlatCap || mode == LogoutRenderMode.Both) {
-                    double p = 0.4;
-                    Box cap = new Box(record.pos().x - p, record.pos().y, record.pos().z - p, record.pos().x + p, record.pos().y + 0.05, record.pos().z + p);
-                    event.renderer.box(cap, color, color, ShapeMode.Both, 0);
-                }
-            }
-        }
-    }
-
-    @EventHandler
-    private void onRender2D(Render2DEvent event) {
-        if (mc.world == null || mc.player == null) return;
-        if (!trackLogouts.get() || logoutRenderMode.get() == LogoutRenderMode.None) return;
-
-        String currentDim = mc.world.getRegistryKey().getValue().toString();
-        LogoutRenderMode mode = logoutRenderMode.get();
-        SettingColor color = logoutColor.get();
-
-        for (LogoutRecord record : logouts) {
-            if (!record.dimension.equals(currentDim)) continue;
-
-            long elapsed = (System.currentTimeMillis() - record.time()) / 1000;
-            String posStr = formatPos(record.pos());
-            String text = String.format("%s %s (%s ago)", record.name(), posStr, formatTime(elapsed));
-
-            Vector3d tagPos = new Vector3d(record.pos().x, record.pos().y + (mode == LogoutRenderMode.FlatCap ? 0.5 : 2.1), record.pos().z);
-
-            if (NametagUtils.to2D(tagPos, logoutNametagScale.get())) {
-                NametagUtils.begin(tagPos, event.drawContext);
-                TextRenderer tr = TextRenderer.get();
-                double w = tr.getWidth(text);
-                double h = tr.getHeight();
-
-                event.drawContext.fill((int)(-w / 2 - 2), (int)(-h / 2 - 2), (int)(w / 2 + 2), (int)(h / 2 + 2), new Color(0, 0, 0, 150).getPacked());
-
-                tr.begin(1.0, false, true);
-                tr.render(text, -w / 2, -h / 2, color);
-                tr.end();
-                NametagUtils.end(event.drawContext);
+                // Using ShapeMode.Lines prevents the glitchy Z-fighting filled faces that ShapeMode.Both causes
+                WireframeEntityRenderer.render(
+                    event, player, outlineScale.get(),
+                    withAlpha(color, 0), color, ShapeMode.Lines
+                );
             }
         }
     }
@@ -619,18 +423,11 @@ public class NeighbourhoodWatch extends Module {
 
             if (packet.getActions().contains(PlayerListS2CPacket.Action.ADD_PLAYER)) {
                 if (playersInTab.add(name)) {
-                    if (monitorTabList.get()) handleTabListChange(name, "joined");
-                    logouts.removeIf(r -> r.name.equalsIgnoreCase(name));
+                    handleTabListChange(name, "joined");
                 }
             } else if (packet.getActions().contains(PlayerListS2CPacket.Action.UPDATE_LISTED) && !entry.listed()) {
                 if (playersInTab.remove(name)) {
-                    if (monitorTabList.get()) handleTabListChange(name, "left");
-                    if (trackLogouts.get() && lastKnownPos.containsKey(name)) {
-                        if (logouts.size() >= maxLogouts.get()) logouts.remove(0);
-                        Vec3d pos = lastKnownPos.get(name);
-                        logouts.add(new LogoutRecord(name, pos, System.currentTimeMillis(), mc.world.getRegistryKey().getValue().toString()));
-                        info("§c%s §7logged out at %s", name, formatPos(pos));
-                    }
+                    handleTabListChange(name, "left");
                 }
             }
         }
@@ -737,28 +534,6 @@ public class NeighbourhoodWatch extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Bloom Rendering
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
-        int    layers    = glowLayers.get();
-        double spread    = glowSpread.get();
-        int    baseAlpha = glowBaseAlpha.get();
-
-        for (int i = layers; i >= 1; i--) {
-            double expansion  = spread * i;
-            double t          = (double)(i - 1) / layers;
-            int    layerAlpha = Math.max(4, (int)(baseAlpha * (1.0 - t * t)));
-            event.renderer.box(
-                box.expand(expansion),
-                withAlpha(color, layerAlpha),
-                withAlpha(color, 0),
-                ShapeMode.Sides, 0
-            );
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Chat Parsing — Message Control
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -777,25 +552,21 @@ public class NeighbourhoodWatch extends Module {
     }
 
     private String findKeyword(String body) {
-        boolean cs     = ignoreCaseSensitive.get();
-        String  search = cs ? body : body.toLowerCase();
+        String search = body.toLowerCase();
         for (String kw : ignoreKeywords.get()) {
             if (kw.isBlank()) continue;
-            if (search.contains(cs ? kw : kw.toLowerCase())) return kw;
+            if (search.contains(kw.toLowerCase())) return kw;
         }
         return null;
     }
 
     private String censorMessage(String rawMessage) {
-        boolean cs      = ignoreCaseSensitive.get();
         String  working = rawMessage;
         boolean changed = false;
         for (String kw : ignoreKeywords.get()) {
             if (kw.isBlank()) continue;
             String replacement = "X".repeat(kw.length());
-            String replaced    = cs
-                ? working.replace(kw, replacement)
-                : working.replaceAll("(?i)" + java.util.regex.Pattern.quote(kw), replacement);
+            String replaced = working.replaceAll("(?i)" + java.util.regex.Pattern.quote(kw), replacement);
             if (!replaced.equals(working)) { working = replaced; changed = true; }
         }
         return changed ? working : null;
@@ -813,107 +584,12 @@ public class NeighbourhoodWatch extends Module {
 
         mc.player.networkHandler.sendChatCommand("ignorehard " + sender);
         ignoredThisSession.add(sender.toLowerCase());
-        if (ignoreNotify.get()) info("Auto-ignored %s (keyword match).", sender);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Outline Color Injection
-    //
-    // In Minecraft 1.21.4, net.minecraft.scoreboard.ScoreboardTeam was renamed
-    // to net.minecraft.scoreboard.Team (the old Team interface was removed).
-    // We call setColor() directly on the Team reference — no instanceof cast needed.
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Assigns the entity to a temporary scoreboard team that carries the desired outline color.
-     * FIX: Removed the broken "instanceof ScoreboardTeam" pattern — in 1.21.4 the concrete
-     * class IS net.minecraft.scoreboard.Team, so we call setColor() on the Team reference directly.
-     */
-    private void applyOutlineColor(PlayerEntity player, SettingColor color) {
-        if (mc.world == null) return;
-        int rgb = (color.r << 16) | (color.g << 8) | color.b;
-        String teamName = "nw_" + Integer.toHexString(rgb);
-
-        net.minecraft.scoreboard.Scoreboard scoreboard = mc.world.getScoreboard();
-        net.minecraft.scoreboard.Team team = scoreboard.getTeam(teamName);
-        if (team == null) {
-            scoreboard.addTeam(teamName);
-            team = scoreboard.getTeam(teamName);
-            // In 1.21.4, Team is the concrete class (ScoreboardTeam was renamed to Team).
-            // setColor() is available directly on the Team reference — no cast required.
-            if (team != null) {
-                team.setColor(net.minecraft.util.Formatting.byColorIndex(closestFormattingColor(color)));
-            }
-        }
-        if (team != null) {
-            scoreboard.addScoreHolderToTeam(player.getName().getString(), team);
-        }
-    }
-
-    /** Removes the entity from any nw_ team we added. */
-    private void removeOutlineColor(Entity entity) {
-        if (mc.world == null) return;
-        net.minecraft.scoreboard.Scoreboard scoreboard = mc.world.getScoreboard();
-        net.minecraft.scoreboard.Team team = scoreboard.getTeam(entity.getName().getString());
-        if (team != null && team.getName().startsWith("nw_")) {
-            scoreboard.removeScoreHolderFromTeam(entity.getName().getString(), team);
-        }
-    }
-
-    /**
-     * Maps an RGBA color to the nearest Minecraft Formatting color index (0–15).
-     * This is the value stored in Team and read back by the outline shader.
-     */
-    private int closestFormattingColor(SettingColor c) {
-        // Minecraft's 16 color palette (R,G,B) indexed by Formatting.colorIndex
-        int[][] palette = {
-            {0,0,0},{0,0,170},{0,170,0},{0,170,170},
-            {170,0,0},{170,0,170},{255,170,0},{170,170,170},
-            {85,85,85},{85,85,255},{85,255,85},{85,255,255},
-            {255,85,85},{255,85,255},{255,255,85},{255,255,255}
-        };
-        int best = 15, bestDist = Integer.MAX_VALUE;
-        for (int i = 0; i < palette.length; i++) {
-            int dr = c.r - palette[i][0];
-            int dg = c.g - palette[i][1];
-            int db = c.b - palette[i][2];
-            int dist = dr*dr + dg*dg + db*db;
-            if (dist < bestDist) { bestDist = dist; best = i; }
-        }
-        return best;
-    }
-
-    public String formatPos(Vec3d pos) {
-        if (pos == null) return "";
-        return switch (coordVisibility.get()) {
-            case Censored -> "§8(§fXXXX§8, §fXXXX§8, §fXXXX§8)";
-            case Hidden -> "";
-            default -> String.format("§8(§f%d§8, §f%d§8, §f%d§8)", (int) pos.x, (int) pos.y, (int) pos.z);
-        };
-    }
-
-    private void clearLogouts() {
-        if (mc.currentScreen != null) return;
-        logouts.clear();
-        lastKnownPos.clear();
-        info("Cleared all logout spots.");
-    }
-
-    private String formatTime(long seconds) {
-        if (seconds < 60) return seconds + "s";
-        if (seconds < 3600) return (seconds / 60) + "m";
-        return (seconds / 3600) + "h " + ((seconds % 3600) / 60) + "m";
+        info("Auto-ignored %s (keyword match).", sender);
     }
 
     private void clearAllOutlines() {
-        if (mc.world != null) {
-            for (int id : activelyOutlined) {
-                Entity e = mc.world.getEntityById(id);
-                if (e != null) {
-                    e.setGlowing(false);
-                    removeOutlineColor(e);
-                }
-            }
+        for (int id : activelyOutlined) {
+            GlowingRegistry.remove(id);
         }
         activelyOutlined.clear();
     }
@@ -926,9 +602,6 @@ public class NeighbourhoodWatch extends Module {
         notifiedPlayers.clear();
         ignoredThisSession.clear();
         playersInTab.clear();
-        lastKnownPos.clear();
-        // Note: activelyOutlined is cleared separately via clearAllOutlines()
-        // so that setGlowing(false) is called before the IDs are lost.
     }
 
     private void updateFriendEnemySets() {
@@ -993,9 +666,5 @@ public class NeighbourhoodWatch extends Module {
     /** Exposes whether the disconnect-on-player safety feature is armed. Used by the HUD. */
     public boolean isDisconnectOnPlayerArmed() {
         return disconnectOnPlayer.get();
-    }
-
-    public List<LogoutRecord> getLogouts() {
-        return logouts;
     }
 }

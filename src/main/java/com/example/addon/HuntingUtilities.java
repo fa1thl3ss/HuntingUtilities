@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.addon.hud.BaromineHud;
+import com.example.addon.hud.ChambersAssistantHud;
 import com.example.addon.hud.DungeonAssistantHud;
 import com.example.addon.hud.DuraPanelHUD;
 import com.example.addon.hud.EightToOneHUD;
@@ -22,6 +23,8 @@ import com.example.addon.hud.ServerReportHUD;
 import com.example.addon.hud.StatisticsInformation;
 import com.example.addon.hud.TimeThrottleHUD;
 import com.example.addon.modules.Baromine;
+import com.example.addon.modules.ChambersAssistant;
+import com.example.addon.modules.Datamine;
 import com.example.addon.modules.DungeonAssistant;
 import com.example.addon.modules.EightToOne;
 import com.example.addon.modules.ElytraAssistant;
@@ -43,7 +46,6 @@ import com.example.addon.modules.PortalMaker;
 import com.example.addon.modules.RocketPilot;
 import com.example.addon.modules.ServerHealthcareSystem;
 import com.example.addon.modules.SignScanner;
-import com.example.addon.modules.Terralien;
 import com.example.addon.modules.ThirdSight;
 import com.example.addon.modules.Timethrottle;
 import com.example.addon.modules.TotalDisposal;
@@ -67,7 +69,9 @@ public class HuntingUtilities extends MeteorAddon {
         // Modules
         Modules modules = Modules.get();
         modules.add(new Baromine());
+        modules.add(new ChambersAssistant());
         modules.add(new DungeonAssistant());
+        modules.add(new Datamine());
         modules.add(new EightToOne());
         modules.add(new ElytraAssistant());
         modules.add(new EndSafe());
@@ -88,7 +92,6 @@ public class HuntingUtilities extends MeteorAddon {
         modules.add(new RocketPilot());
         modules.add(new ServerHealthcareSystem());
         modules.add(new SignScanner());
-        modules.add(new Terralien());
         modules.add(new TotalDisposal());
         modules.add(new ThirdSight());
         modules.add(new Timethrottle());
@@ -97,6 +100,7 @@ public class HuntingUtilities extends MeteorAddon {
         // HUD elements
         Hud.get().register(BaromineHud.INFO);
         Hud.get().register(DungeonAssistantHud.INFO);
+        Hud.get().register(ChambersAssistantHud.INFO);
         Hud.get().register(DuraPanelHUD.INFO);
         Hud.get().register(EightToOneHUD.INFO);
         Hud.get().register(GatekeeperHUD.INFO);

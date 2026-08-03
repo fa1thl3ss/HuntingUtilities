@@ -74,7 +74,8 @@ public class SignScanner extends Module {
 
     public enum HighlightStyle {
         GLOW("Glow"),
-        SPECTRAL("Spectral");
+        SPECTRAL("Spectral"),
+        PULSE("Pulse");
 
         private final String displayName;
         HighlightStyle(String name) { this.displayName = name; }
@@ -240,7 +241,7 @@ public class SignScanner extends Module {
 
     private final Setting<HighlightStyle> highlightStyle = sgRender.add(new EnumSetting.Builder<HighlightStyle>()
         .name("highlight-style")
-        .description("GLOW renders layered bloom around the panel. SPECTRAL renders a crisp outline like the spectral arrow effect.")
+        .description("GLOW renders layered bloom around the panel. SPECTRAL renders a crisp outline like the spectral arrow effect. PULSE renders a fading bloom.")
         .defaultValue(HighlightStyle.GLOW)
         .visible(background::get).build());
 
@@ -260,12 +261,12 @@ public class SignScanner extends Module {
     private final Setting<Integer> glowLayers = sgGlow.add(new IntSetting.Builder()
         .name("glow-layers").description("Number of bloom layers rendered around the background panel.")
         .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> background.get() && highlightStyle.get() == HighlightStyle.GLOW).build());
+        .visible(() -> background.get() && (highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE)).build());
 
     private final Setting<Double> glowSpread = sgGlow.add(new DoubleSetting.Builder()
         .name("glow-spread").description("How far each bloom layer expands outward (in pixels).")
         .defaultValue(3.0).min(0.5).sliderMax(12.0)
-        .visible(() -> background.get() && highlightStyle.get() == HighlightStyle.GLOW).build());
+        .visible(() -> background.get() && (highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE)).build());
 
     private final Setting<Integer> glowBaseAlpha = sgGlow.add(new IntSetting.Builder()
         .name("glow-base-alpha").description("Alpha of the innermost glow layer (0-255).")
@@ -275,7 +276,28 @@ public class SignScanner extends Module {
     private final Setting<SettingColor> glowColor = sgGlow.add(new ColorSetting.Builder()
         .name("glow-color").description("Color of the bloom glow.")
         .defaultValue(new SettingColor(100, 180, 255, 255))
-        .visible(() -> background.get() && highlightStyle.get() == HighlightStyle.GLOW).build());
+        .visible(() -> background.get() && (highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE)).build());
+
+    private final Setting<Double> pulseSpeed = sgGlow.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> background.get() && highlightStyle.get() == HighlightStyle.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMinAlpha = sgGlow.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> background.get() && highlightStyle.get() == HighlightStyle.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMaxAlpha = sgGlow.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> background.get() && highlightStyle.get() == HighlightStyle.PULSE).build()
+    );
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Spectral
@@ -683,6 +705,8 @@ public class SignScanner extends Module {
         if (background.get()) {
             if (highlightStyle.get() == HighlightStyle.GLOW) {
                 renderGlowHighlight(bx, by, bw, bh);
+            } else if (highlightStyle.get() == HighlightStyle.PULSE) {
+                renderPulseHighlight(bx, by, bw, bh);
             } else {
                 renderSpectralHighlight(bx, by, bw, bh);
             }
@@ -740,6 +764,46 @@ public class SignScanner extends Module {
                 bx - expansion, by - expansion,
                 bw + expansion * 2, bh + expansion * 2,
                 withAlpha(gc, layerAlpha)
+            );
+        }
+        Renderer2D.COLOR.render(null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Pulse Highlight
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
+    }
+
+    private int applyPulse(int baseAlpha) {
+        float f = getPulseFactor();
+        int min = pulseMinAlpha.get();
+        int max = pulseMaxAlpha.get();
+        return Math.min(255, Math.max(0, (int)(min + (max - min) * f)));
+    }
+
+    private void renderPulseHighlight(double bx, double by, double bw, double bh) {
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        SettingColor gc = glowColor.get();
+
+        int pa = applyPulse(gc.a);
+        SettingColor pColor = withAlpha(gc, pa);
+
+        Renderer2D.COLOR.begin();
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            Renderer2D.COLOR.quad(
+                bx - expansion, by - expansion,
+                bw + expansion * 2, bh + expansion * 2,
+                withAlpha(pColor, layerAlpha)
             );
         }
         Renderer2D.COLOR.render(null);

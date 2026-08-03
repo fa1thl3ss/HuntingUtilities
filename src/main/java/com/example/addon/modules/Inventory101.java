@@ -744,11 +744,15 @@ public class Inventory101 extends Module {
             } else if (!moveAllActionTaken) {
                 double mouseX = mc.mouse.getX();
                 double mouseY = mc.mouse.getY();
+                
                 if (lastMouseX != -1) {
                     double deltaX = mouseX - lastMouseX;
                     double deltaY = mouseY - lastMouseY;
                     double dist   = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-                    if (dist > 1) {
+                    
+                    // Only interpolate if moving roughly horizontally (staying in the same row).
+                    // This catches fast horizontal drags without clipping into rows above/below.
+                    if (dist > 1 && Math.abs(deltaY) < 14) {
                         int steps = (int) Math.ceil(dist / 2.0);
                         for (int i = 0; i <= steps; i++) {
                             double currentX = lastMouseX + (deltaX * i / steps);
@@ -761,11 +765,15 @@ public class Inventory101 extends Module {
                         }
                     }
                 }
+                
+                // Always ensure the currently focused slot is processed.
+                // This catches fast vertical/diagonal movements safely without missing the target.
                 Slot focused = getFocusedSlot(screen);
                 if (focused != null && focused.hasStack() && !processedInDrag.contains(focused.id)) {
                     mc.interactionManager.clickSlot(screen.getScreenHandler().syncId, focused.id, 0, SlotActionType.QUICK_MOVE, mc.player);
                     processedInDrag.add(focused.id);
                 }
+                
                 lastMouseX = mouseX;
                 lastMouseY = mouseY;
             }

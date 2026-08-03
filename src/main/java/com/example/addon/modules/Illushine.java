@@ -30,7 +30,6 @@ import net.minecraft.entity.mob.Angerable;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.passive.PassiveEntity;
-import net.minecraft.util.math.Box;
 
 public class Illushine extends Module {
 
@@ -44,7 +43,6 @@ public class Illushine extends Module {
      * Wireframe — custom geometry outline drawn by WireframeEntityRenderer.
      * Spectral  — vanilla glowing outline (spectral arrow effect) driven by
      *             GlowingRegistry → existing EntityGlowingMixin pipeline.
-     * Both modes render the bloom box-expand halo on top.
      */
     public enum HighlightMode {
         Wireframe("Wireframe"),
@@ -69,33 +67,6 @@ public class Illushine extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Category override table
-    //
-    // Runtime instanceof checks used as the base classification:
-    //   HostileEntity  → HOSTILE
-    //   Angerable      → NEUTRAL
-    //   PassiveEntity  → PASSIVE
-    //
-    // Entries here are ONLY needed when a mob would be mis-classified by those
-    // checks, or when the correct category needs to be stated explicitly.
-    //
-    // Passive overrides:
-    //   Fox        → PassiveEntity in code, correct by default. Explicit for clarity.
-    //   Baby Piglin→ shares EntityType.PIGLIN with adult; handled in categorise()
-    //                via isBaby() since EntityType alone cannot distinguish them.
-    //
-    // Neutral overrides (extend HostileEntity but are neutral toward players):
-    //   Zombified Piglin, Enderman, Goat.
-    //   Spider / Cave Spider are handled dynamically in categorise() — neutral
-    //   during the day, hostile at night.
-    //
-    // Hostile overrides that need explicit entries:
-    //   Piglin — extends HostileEntity, hostile by default. Listed explicitly
-    //   to document Baby Piglin exception handled in categorise().
-    //
-    // Hostile overrides (do NOT extend HostileEntity):
-    //   Ghast, Shulker, Phantom, Slime, Magma Cube, Hoglin.
-    //   Piglin Brute extends HostileEntity correctly but is listed explicitly
-    //   to document that it is always hostile (unlike regular Piglins).
     // ═══════════════════════════════════════════════════════════════════════════
 
     private static final Map<EntityType<?>, MobCategory> CATEGORY_OVERRIDES = new HashMap<>(Map.ofEntries(
@@ -103,24 +74,13 @@ public class Illushine extends Module {
         Map.entry(EntityType.FOX,              MobCategory.PASSIVE),
 
         // ── Neutral ──────────────────────────────────────────────────────────
-        // PIGLIN: hostile toward players not wearing gold armour. Since we cannot
-        // know whether the player is wearing gold, we treat them as hostile by default.
-        // Baby Piglins share this EntityType but are passive — see categorise().
         Map.entry(EntityType.PIGLIN,           MobCategory.HOSTILE),
-        // ZOMBIFIED_PIGLIN: neutral, only retaliates when attacked.
         Map.entry(EntityType.ZOMBIFIED_PIGLIN, MobCategory.NEUTRAL),
-        // ENDERMAN: neutral unless looked at directly.
         Map.entry(EntityType.ENDERMAN,         MobCategory.NEUTRAL),
-        // SPIDER / CAVE_SPIDER: handled dynamically in categorise() based on
-        // time of day — neutral in daylight, hostile at night.
-        // GOAT: charges players and mobs unprovoked; extends AnimalEntity (PassiveEntity).
         Map.entry(EntityType.GOAT,             MobCategory.NEUTRAL),
 
         // ── Hostile ──────────────────────────────────────────────────────────
-        // PIGLIN_BRUTE: always hostile regardless of gold armour; extends HostileEntity.
-        // Listed explicitly to distinguish from neutral adult Piglins.
         Map.entry(EntityType.PIGLIN_BRUTE,     MobCategory.HOSTILE),
-        // These do NOT extend HostileEntity so the instanceof check misses them.
         Map.entry(EntityType.GHAST,            MobCategory.HOSTILE),
         Map.entry(EntityType.SHULKER,          MobCategory.HOSTILE),
         Map.entry(EntityType.PHANTOM,          MobCategory.HOSTILE),
@@ -138,7 +98,6 @@ public class Illushine extends Module {
     private final SettingGroup sgPassive   = settings.createGroup("Passive");
     private final SettingGroup sgNeutral   = settings.createGroup("Neutral");
     private final SettingGroup sgHostile   = settings.createGroup("Hostile");
-    private final SettingGroup sgGlow      = settings.createGroup("Glow");
     private final SettingGroup sgPlayer    = settings.createGroup("Player Scale");
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -252,37 +211,6 @@ public class Illushine extends Module {
         .defaultValue(1.0).min(0.1).sliderMax(3.0).visible(highlightHostile::get).build());
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Settings — Glow (Wireframe mode only)
-    // In Spectral mode the vanilla glow pipeline handles the outline itself;
-    // bloom boxes on top would clash with it and look wrong.
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private final Setting<Boolean> glowEnabled = sgGlow.add(new BoolSetting.Builder()
-        .name("glow")
-        .description("Render a bloom halo around each mob (Wireframe mode only).")
-        .defaultValue(true)
-        .visible(() -> highlightMode.get() == HighlightMode.Wireframe)
-        .build());
-
-    private final Setting<Integer> glowLayers = sgGlow.add(new IntSetting.Builder()
-        .name("glow-layers").description("Number of bloom layers.")
-        .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> highlightMode.get() == HighlightMode.Wireframe && glowEnabled.get())
-        .build());
-
-    private final Setting<Double> glowSpread = sgGlow.add(new DoubleSetting.Builder()
-        .name("glow-spread").description("How far each bloom layer expands (blocks).")
-        .defaultValue(0.05).min(0.01).sliderMax(0.2)
-        .visible(() -> highlightMode.get() == HighlightMode.Wireframe && glowEnabled.get())
-        .build());
-
-    private final Setting<Integer> glowBaseAlpha = sgGlow.add(new IntSetting.Builder()
-        .name("glow-base-alpha").description("Alpha of the innermost glow layer.")
-        .defaultValue(60).min(10).sliderMax(150)
-        .visible(() -> highlightMode.get() == HighlightMode.Wireframe && glowEnabled.get())
-        .build());
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Settings — Player Scale
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -308,7 +236,6 @@ public class Illushine extends Module {
         .build()
     );
 
-    // DEBUG SETTING
     private final Setting<Boolean> debugPlayerScale = sgPlayer.add(new BoolSetting.Builder()
         .name("debug-player-scale")
         .description("Spams console logs to figure out why scaling isn't working.")
@@ -357,12 +284,10 @@ public class Illushine extends Module {
     @Override
     public void onActivate() {
         activelyOutlined.clear();
-        // Do not clear the whole registry — other modules may own entries.
     }
 
     @Override
     public void onDeactivate() {
-        // Remove only the entries this module registered.
         for (Integer id : activelyOutlined.keySet()) {
             GlowingRegistry.remove(id);
         }
@@ -370,7 +295,7 @@ public class Illushine extends Module {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Tick — rebuild active set, sync GlowingRegistry for Spectral mode
+    // Tick
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
@@ -379,9 +304,6 @@ public class Illushine extends Module {
 
         boolean spectral = highlightMode.get() == HighlightMode.Spectral;
 
-        // Build the new active set first, then atomically swap the registry.
-        // This avoids the window between clear() and add() where isGlowing()
-        // would return false and cause a flicker or missed frame.
         Map<Integer, MobCategory> newOutlined = new HashMap<>();
 
         for (Entity entity : mc.world.getEntities()) {
@@ -401,19 +323,14 @@ public class Illushine extends Module {
         }
 
         if (spectral) {
-            // Remove entries for IDs that were active last tick but aren't now.
-            // Do this BEFORE updating activelyOutlined so we still have the old set.
             for (Integer id : activelyOutlined.keySet()) {
                 if (!newOutlined.containsKey(id)) GlowingRegistry.remove(id);
             }
-            // Add/update all currently active entries.
             for (Map.Entry<Integer, MobCategory> entry : newOutlined.entrySet()) {
                 SettingColor c = colorForCategory(entry.getValue());
                 GlowingRegistry.add(entry.getKey(), (255 << 24) | (c.r << 16) | (c.g << 8) | c.b);
             }
         } else {
-            // Wireframe mode — remove any registry entries we left behind from
-            // a previous Spectral session.
             for (Integer id : activelyOutlined.keySet()) {
                 GlowingRegistry.remove(id);
             }
@@ -425,11 +342,6 @@ public class Illushine extends Module {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Render
-    // Wireframe mode  — WireframeEntityRenderer draws the outline + bloom here.
-    // Spectral mode   — outline is drawn entirely by the vanilla glow pipeline
-    //                   via GlowingRegistry → EntityGlowingMixin. No extra
-    //                   geometry is drawn here; bloom is intentionally skipped
-    //                   as it would clash with the spectral outline shader.
     // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
@@ -445,39 +357,11 @@ public class Illushine extends Module {
             SettingColor color = colorForCategory(entry.getValue());
 
             if (wireframe) {
-                // Bloom halo behind the wireframe outline.
-                if (glowEnabled.get()) {
-                    renderGlowLayers(event, mob.getBoundingBox(), color);
-                }
                 WireframeEntityRenderer.render(
                     event, mob, outlineScale.get(),
                     withAlpha(color, 25), color, ShapeMode.Both
                 );
             }
-            // Spectral: the vanilla glow pipeline draws the coloured outline via
-            // GlowingRegistry → EntityGlowingMixin. Nothing extra needed here —
-            // adding bloom boxes on top would clash with the spectral effect.
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Bloom
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private void renderGlowLayers(Render3DEvent event, Box box, SettingColor color) {
-        int    layers    = glowLayers.get();
-        double spread    = glowSpread.get();
-        int    baseAlpha = glowBaseAlpha.get();
-
-        for (int i = layers; i >= 1; i--) {
-            double expansion = spread * i;
-            double t          = (double)(i - 1) / layers;
-            int    layerAlpha = Math.max(4, (int)(baseAlpha * (1.0 - t * t)));
-            event.renderer.box(
-                box.expand(expansion),
-                withAlpha(color, layerAlpha), withAlpha(color, 0),
-                ShapeMode.Sides, 0
-            );
         }
     }
 
@@ -520,15 +404,8 @@ public class Illushine extends Module {
     // ═══════════════════════════════════════════════════════════════════════════
 
     private MobCategory categorise(MobEntity mob) {
-        // Baby Piglin shares EntityType.PIGLIN with adults but is always passive —
-        // it never attacks and does not grow up. Check before the override table
-        // so it does not inherit the adult HOSTILE classification.
         if (mob.getType() == EntityType.PIGLIN && mob.isBaby()) return MobCategory.PASSIVE;
 
-        // Spider / Cave Spider are neutral during the day and hostile at night.
-        // Vanilla threshold: time of day < 13000 (daytime) → neutral, else hostile.
-        // Also check canSeeSky so spiders deep underground (always hostile) are
-        // correctly flagged regardless of surface time.
         if (mob.getType() == EntityType.SPIDER || mob.getType() == EntityType.CAVE_SPIDER) {
             long time = mc.world.getTimeOfDay() % 24000;
             boolean isDay = time < 13000;

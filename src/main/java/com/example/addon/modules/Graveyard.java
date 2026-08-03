@@ -22,10 +22,12 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.component.DataComponentTypes;
+import net.minecraft.entity.ExperienceOrbEntity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 
@@ -80,7 +82,7 @@ public class Graveyard extends Module {
 
     private final Setting<Boolean> notification = sgGeneral.add(new BoolSetting.Builder()
         .name("notification")
-        .description("Send chat messages and play sound when new whitelisted items are found.")
+        .description("Send chat messages and play sound when new whitelisted items or XP orbs are found.")
         .defaultValue(true)
         .build()
     );
@@ -92,7 +94,7 @@ public class Graveyard extends Module {
         .build()
     );
 
-private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListSetting.Builder()
+    private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListSetting.Builder()
         .name("whitelisted-items")
         .description("Items to look for on the ground, like diamond swords and valuable gear.")
         .defaultValue(List.of(Items.ELYTRA, Items.TOTEM_OF_UNDYING, Items.BOW,
@@ -111,6 +113,23 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
             Items.DIAMOND_HELMET, Items.DIAMOND_CHESTPLATE, Items.DIAMOND_LEGGINGS, Items.DIAMOND_BOOTS,
             Items.NETHERITE_HELMET, Items.NETHERITE_CHESTPLATE, Items.NETHERITE_LEGGINGS, Items.NETHERITE_BOOTS
         ))
+        .build()
+    );
+
+    // ── XP Orbs ───────────────────────────────────────────────────────────────
+
+    private final Setting<Boolean> detectXpOrbs = sgGeneral.add(new BoolSetting.Builder()
+        .name("detect-xp-orbs")
+        .description("Detects Experience Orbs on the ground and creates a beam and notifier.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<SettingColor> xpBeamColor = sgGeneral.add(new ColorSetting.Builder()
+        .name("xp-beam-color")
+        .description("Color of the beam for Experience Orbs.")
+        .defaultValue(new SettingColor(255, 255, 0, 200))
+        .visible(() -> detectXpOrbs.get() && showBeam.get())
         .build()
     );
 
@@ -141,17 +160,22 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
 
     // ── State ─────────────────────────────────────────────────────────────────
 
-    private final List<ItemEntity> itemsToRender        = new ArrayList<>();
-    private final Set<Integer>     notifiedItemEntities = new HashSet<>();
+    private final List<ItemEntity> itemsToRender            = new ArrayList<>();
+    private final List<ExperienceOrbEntity> xpOrbsToRender  = new ArrayList<>();
+    private final Set<Integer>     notifiedItemEntities     = new HashSet<>();
+    private long lastXpNotifyTime = 0;
+    private static final long XP_NOTIFY_COOLDOWN_MS = 3000;
 
     public Graveyard() {
-        super(HuntingUtilities.CATEGORY, "graveyard", "Highlights valuable items on the ground.");
+        super(HuntingUtilities.CATEGORY, "graveyard", "Highlights valuable items and XP on the ground.");
     }
 
     @Override
     public void onActivate() {
         notifiedItemEntities.clear();
         itemsToRender.clear();
+        xpOrbsToRender.clear();
+        lastXpNotifyTime = 0;
     }
 
     // ── Tick ──────────────────────────────────────────────────────────────────
@@ -162,6 +186,7 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
 
         notifiedItemEntities.removeIf(id -> mc.world.getEntityById(id) == null);
         itemsToRender.clear();
+        xpOrbsToRender.clear();
 
         Box searchArea = new Box(mc.player.getBlockPos()).expand(range.get());
 
@@ -171,28 +196,44 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
             e -> {
                 ItemStack stack = e.getStack();
                 if (!whitelistedItems.get().contains(stack.getItem())) return false;
-                // When enchanted-only is on, only apply the enchantment gate to items
-                // that are actually capable of being enchanted. Items that cannot be
-                // enchanted (totems, shulker boxes, fireworks, etc.) always pass so
-                // they are never accidentally hidden.
                 if (enchantedOnly.get() && canBeEnchanted(stack) && !isEnchanted(stack)) return false;
                 return true;
             }
         );
 
-        if (matching.isEmpty()) return;
-
         if (sortByDistance.get()) {
             matching.sort(Comparator.comparingDouble(e -> mc.player.squaredDistanceTo(e)));
         }
 
-        if (onlyNearest.get()) {
-            ItemEntity closest = matching.get(0);
-            itemsToRender.add(closest);
-            notifyIfNew(closest);
-        } else {
-            itemsToRender.addAll(matching);
-            for (ItemEntity item : matching) notifyIfNew(item);
+        if (!matching.isEmpty()) {
+            if (onlyNearest.get()) {
+                ItemEntity closest = matching.get(0);
+                itemsToRender.add(closest);
+                notifyIfNew(closest);
+            } else {
+                itemsToRender.addAll(matching);
+                for (ItemEntity item : matching) notifyIfNew(item);
+            }
+        }
+
+        if (detectXpOrbs.get()) {
+            List<ExperienceOrbEntity> xpOrbs = mc.world.getEntitiesByClass(
+                ExperienceOrbEntity.class,
+                searchArea,
+                e -> true
+            );
+
+            if (!xpOrbs.isEmpty()) {
+                xpOrbsToRender.addAll(xpOrbs);
+                if (notification.get()) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastXpNotifyTime > XP_NOTIFY_COOLDOWN_MS) {
+                        lastXpNotifyTime = now;
+                        info("Found XP orbs nearby!");
+                        mc.player.playSound(SoundEvents.ENTITY_PLAYER_LEVELUP, 0.8f, 1.5f);
+                    }
+                }
+            }
         }
     }
 
@@ -200,7 +241,7 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        if (!showBeam.get() || itemsToRender.isEmpty()) return;
+        if (!showBeam.get() || (itemsToRender.isEmpty() && xpOrbsToRender.isEmpty())) return;
 
         double  halfWidth  = beamWidth.get() / 2.0;
         double  topOfWorld = mc.world.getHeight();
@@ -218,14 +259,20 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
             );
             event.renderer.box(beam, c, c, ShapeMode.Both, 0);
         }
+
+        for (ExperienceOrbEntity orb : xpOrbsToRender) {
+            SettingColor c = xpBeamColor.get();
+            Vec3d pos  = orb.getPos();
+            Box   beam = new Box(
+                pos.x - halfWidth, pos.y, pos.z - halfWidth,
+                pos.x + halfWidth, topOfWorld, pos.z + halfWidth
+            );
+            event.renderer.box(beam, c, c, ShapeMode.Both, 0);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /**
-     * Returns true if the stack carries at least one enchantment.
-     * Checks both regular enchantments and stored enchantments (books).
-     */
     private boolean isEnchanted(ItemStack stack) {
         var enchants = stack.get(DataComponentTypes.ENCHANTMENTS);
         if (enchants != null && !enchants.isEmpty()) return true;
@@ -233,14 +280,6 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
         return stored != null && !stored.isEmpty();
     }
 
-    /**
-     * Returns true if this item type is capable of receiving enchantments via
-     * an enchanting table or anvil. Uses Minecraft's own isEnchantable() check
-     * so it covers all current and future enchantable items without a hard-coded
-     * list. Items that return false here are always shown when enchanted-only is
-     * on, since demanding an enchantment on something that can never have one
-     * would make it permanently invisible.
-     */
     private boolean canBeEnchanted(ItemStack stack) {
         return stack.isEnchantable();
     }
@@ -252,7 +291,7 @@ private final Setting<List<Item>> whitelistedItems = sgGeneral.add(new ItemListS
         if (notification.get()) {
             String name = item.getStack().getName().getString();
             info("Found: %s", name);
-            mc.player.playSound(net.minecraft.sound.SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 0.9f, 1.0f);
+            mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 0.9f, 1.0f);
         }
     }
 }

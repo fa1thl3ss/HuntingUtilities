@@ -44,7 +44,7 @@ public class EightToOne extends Module {
     private static final int    CLEANUP_INTERVAL_TICKS           = 60;
     private static final long   MESSAGE_COOLDOWN_MS              = 2000;
 
-    public enum HighlightStyle { GLOW, SPECTRAL }
+    public enum HighlightStyle { GLOW, SPECTRAL, PULSE }
     public enum CoordVisibility { Visible, Censored, Hidden }
     public enum BeamStyle { BOX, GUARDIAN }
 
@@ -112,10 +112,12 @@ public class EightToOne extends Module {
         .name("dynamic-colors").defaultValue(false).build());
 
     private final Setting<Integer> glowLayers = sgRender.add(new IntSetting.Builder()
-        .name("glow-layers").defaultValue(4).min(1).sliderMax(8).visible(() -> highlightStyle.get() == HighlightStyle.GLOW).build());
+        .name("glow-layers").defaultValue(4).min(1).sliderMax(8)
+        .visible(() -> highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE).build());
 
     private final Setting<Double> glowSpread = sgRender.add(new DoubleSetting.Builder()
-        .name("glow-spread").defaultValue(0.05).min(0.01).sliderMax(0.2).visible(() -> highlightStyle.get() == HighlightStyle.GLOW).build());
+        .name("glow-spread").defaultValue(0.05).min(0.01).sliderMax(0.2)
+        .visible(() -> highlightStyle.get() == HighlightStyle.GLOW || highlightStyle.get() == HighlightStyle.PULSE).build());
 
     private final Setting<Integer> glowBaseAlpha = sgRender.add(new IntSetting.Builder()
         .name("glow-base-alpha").defaultValue(50).min(4).sliderMax(150).visible(() -> highlightStyle.get() == HighlightStyle.GLOW).build());
@@ -128,6 +130,27 @@ public class EightToOne extends Module {
 
     private final Setting<Double> spectralExpand = sgRender.add(new DoubleSetting.Builder()
         .name("expand").defaultValue(0.05).visible(() -> highlightStyle.get() == HighlightStyle.SPECTRAL).build());
+
+    private final Setting<Double> pulseSpeed = sgRender.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> highlightStyle.get() == HighlightStyle.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMinAlpha = sgRender.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> highlightStyle.get() == HighlightStyle.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMaxAlpha = sgRender.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> highlightStyle.get() == HighlightStyle.PULSE).build()
+    );
 
     // ── Beam ──
     private final Setting<Boolean> showBeam = sgBeam.add(new BoolSetting.Builder()
@@ -583,6 +606,11 @@ public class EightToOne extends Module {
             
             if (highlightStyle.get() == HighlightStyle.SPECTRAL) {
                 renderSpectral(event, structure, color);
+            } else if (highlightStyle.get() == HighlightStyle.PULSE) {
+                if (highlightFrame.get() && structure.type == PortalType.NETHER && structure.cachedFrameBox != null) {
+                    renderPulseBox(event, structure.cachedFrameBox, color);
+                }
+                renderPulseBox(event, structure.boundingBox, color);
             } else {
                 // FIXED: Use pre-computed frame box instead of accessing world state
                 if (highlightFrame.get() && structure.type == PortalType.NETHER && structure.cachedFrameBox != null) {
@@ -595,7 +623,8 @@ public class EightToOne extends Module {
             
             if (showBeam.get() && (nearest == null || structure == nearest) 
                 && mc.player.getPos().squaredDistanceTo(structure.boundingBox.getCenter()) <= beamDistSq) {
-                renderBeams(event, List.of(new BeamData(structure.boundingBox, color)));
+                SettingColor beamColor = (highlightStyle.get() == HighlightStyle.PULSE) ? pulseColor(color) : color;
+                renderBeams(event, List.of(new BeamData(structure.boundingBox, beamColor)));
             }
         }
     }
@@ -617,6 +646,45 @@ public class EightToOne extends Module {
             int layerAlpha = Math.max(4, (int)(baseAlpha * (1.0 - (double)(i-1) / layers)));
             event.renderer.box(box.expand(spread * i), withAlpha(color, layerAlpha), withAlpha(color, 0), ShapeMode.Sides, 0);
         }
+    }
+
+    // ─────────────────────────── Pulse Rendering Helper ───────────────────────────
+
+    /** Returns a smooth 0..1 factor driven by a sine wave. */
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
+    }
+
+    /** Map a base alpha through the pulse min/max range. */
+    private int applyPulse(int baseAlpha) {
+        float f = getPulseFactor();
+        int min = pulseMinAlpha.get();
+        int max = pulseMaxAlpha.get();
+        return Math.min(255, Math.max(0, (int)(min + (max - min) * f)));
+    }
+
+    /** Convenience: clone a colour with its alpha pulsed. */
+    private SettingColor pulseColor(SettingColor base) {
+        return withAlpha(base, applyPulse(base.a));
+    }
+
+    /** Renders a box with pulsing glow layers and outline. */
+    private void renderPulseBox(Render3DEvent event, Box box, SettingColor base) {
+        int pa = applyPulse(base.a);
+        SettingColor pColor = withAlpha(base, pa);
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            event.renderer.box(box.expand(expansion),
+                withAlpha(pColor, layerAlpha), withAlpha(pColor, 0), ShapeMode.Sides, 0);
+        }
+        event.renderer.box(box, withAlpha(pColor, pa / 3), pColor, ShapeMode.Both, 0);
     }
 
     private void renderBeams(Render3DEvent event, List<BeamData> beams) {

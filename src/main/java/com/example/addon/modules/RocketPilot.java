@@ -1,6 +1,7 @@
 package com.example.addon.modules;
 
-import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 import com.example.addon.HuntingUtilities;
@@ -14,7 +15,6 @@ import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.orbit.EventHandler;
@@ -37,7 +37,7 @@ import net.minecraft.world.RaycastContext;
 public class RocketPilot extends Module {
 
     // ─── Enums ───────────────────────────────────────────────────────────────────
-    public enum FlightMode { None, Normal, Oscillation, Pitch40, AltitudeBounce }
+    public enum FlightMode { None, Normal, Pitch40, AltitudeBounce }
 
     public enum FlightPattern {
         Manual,
@@ -60,7 +60,6 @@ public class RocketPilot extends Module {
     // ─── Setting Groups ───────────────────────────────────────────────────────────
     private final SettingGroup sgFlight       = settings.createGroup("Flight");
     private final SettingGroup sgPitch40      = settings.createGroup("Pitch40");
-    private final SettingGroup sgOscillation  = settings.createGroup("Oscillation");
     private final SettingGroup sgBounce       = settings.createGroup("Altitude Bounce");
     private final SettingGroup sgSweep        = settings.createGroup("Sweep Pattern");
     private final SettingGroup sgPatterns     = settings.createGroup("Patterns");
@@ -163,7 +162,6 @@ public class RocketPilot extends Module {
             if (!isActive() || mc.world == null) return;
             resetPatternState();
             switch (v) {
-                case Oscillation    -> info("Oscillation mode enabled.");
                 case Pitch40        -> info("Pitch40 mode enabled.");
                 case AltitudeBounce -> info("Altitude Bounce mode enabled.");
                 case None           -> info("Flight pitch control disabled.");
@@ -274,34 +272,6 @@ public class RocketPilot extends Module {
         .description("Relocates the sweep pattern origin to your position if you manually fly too far from the current target.")
         .defaultValue(true)
         .visible(() -> flightPattern.get() == FlightPattern.Sweep)
-        .build()
-    );
-
-    // ─── Oscillation Settings ────────────────────────────────────────────────────
-    public final Setting<Double> oscillationSpeed = sgOscillation.add(new DoubleSetting.Builder()
-        .name("oscillation-speed")
-        .description("Speed of the pitch wave cycle (higher = faster).")
-        .defaultValue(0.08)
-        .min(0.01).max(0.5)
-        .sliderRange(0.02, 0.2)
-        .visible(() -> flightMode.get() == FlightMode.Oscillation)
-        .build()
-    );
-
-    private final Setting<Integer> oscillationRocketDelay = sgOscillation.add(new IntSetting.Builder()
-        .name("oscillation-rocket-delay")
-        .description("Minimum delay between rockets in oscillation mode (ms).")
-        .defaultValue(350)
-        .min(0)
-        .visible(() -> flightMode.get() == FlightMode.Oscillation)
-        .build()
-    );
-
-    private final Setting<Boolean> oscillationRockets = sgOscillation.add(new BoolSetting.Builder()
-        .name("oscillation-rockets")
-        .description("Fire rockets at the peak of the upward pitch cycle.")
-        .defaultValue(true)
-        .visible(() -> flightMode.get() == FlightMode.Oscillation)
         .build()
     );
 
@@ -512,8 +482,19 @@ public class RocketPilot extends Module {
 
     private final Setting<Boolean> netherCeilingSafety = sgFlightSafety.add(new BoolSetting.Builder()
         .name("nether-ceiling-safety")
-        .description("Automatically pitches down when approaching the nether bedrock ceiling (Y=128) to prevent death.")
+        .description("Automatically pitches down when approaching the nether bedrock ceiling to prevent death.")
         .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> netherCeilingY = sgFlightSafety.add(new IntSetting.Builder()
+        .name("nether-ceiling-y")
+        .description("The Y-level of the nether bedrock ceiling.")
+        .defaultValue(127)
+        .min(64)
+        .max(256)
+        .sliderRange(100, 200)
+        .visible(netherCeilingSafety::get)
         .build()
     );
 
@@ -581,7 +562,7 @@ public class RocketPilot extends Module {
     public  long    lastRocketTime           = 0;
     private boolean needsTakeoffRocket       = false;
     private boolean ascentMode               = false;
-    private final Set<Long> drunkVisitedChunks = new HashSet<>();
+    private final Set<Long> drunkVisitedChunks = new LinkedHashSet<>();
     private boolean pitch40Climbing          = false;
     private boolean pitch40Rocketing         = false;
     private long    pitch40BelowMinStartTime = -1;
@@ -589,7 +570,6 @@ public class RocketPilot extends Module {
     private boolean bounceClimbing           = true;
 
     private float   targetPitch              = 0;
-    private int     waveTicks                = 0;
     private int     drunkTimer               = 0;
     private float   targetDrunkYaw           = 0;
     private int     currentDrunkDuration     = 0;
@@ -662,7 +642,6 @@ public class RocketPilot extends Module {
     public void onActivate() {
         lastRocketTime           = 0;
         needsTakeoffRocket       = false;
-        waveTicks                = 0;
         drunkTimer               = 0;
         currentDrunkDuration     = 0;
         ascentMode               = false;
@@ -759,9 +738,12 @@ public class RocketPilot extends Module {
             return;
         }
 
-        if (isNearGround() && !mc.player.isGliding()
-                && (!useTargetY.get() || mc.player.getY() < targetY.get())
-                && autoTakeoff.get() && countFireworks() > 0 && !needsTakeoffRocket) {
+        boolean wantsToFly = !useTargetY.get() || mc.player.getY() < targetY.get();
+        if (flightMode.get() == FlightMode.Pitch40 || flightMode.get() == FlightMode.AltitudeBounce) {
+            wantsToFly = true;
+        }
+
+        if (isNearGround() && !mc.player.isGliding() && wantsToFly && autoTakeoff.get() && countFireworks() > 0 && !needsTakeoffRocket) {
             targetPitch = -28.0f;
             mc.player.setPitch(targetPitch);
             if (mc.player.isOnGround()) mc.player.jump();
@@ -779,7 +761,7 @@ public class RocketPilot extends Module {
 
         handleElytraHealth();
 
-        if (ceilingWarningSent && mc.player.getY() < 128.0 - netherCeilingBuffer.get() - 5) {
+        if (ceilingWarningSent && mc.player.getY() < netherCeilingY.get() - netherCeilingBuffer.get() - 5) {
             ceilingWarningSent = false;
         }
 
@@ -802,9 +784,8 @@ public class RocketPilot extends Module {
         if (desiredPitch == null) {
             desiredPitch = switch (flightMode.get()) {
                 case Pitch40        -> handlePitch40Mode();
-                case Oscillation    -> handleOscillationMode();
                 case AltitudeBounce -> handleAltitudeBounceMode();
-                case None           -> null;
+                case None           -> useTargetY.get() ? handleNormalMode() : null;
                 default             -> handleNormalMode();
             };
         }
@@ -812,6 +793,14 @@ public class RocketPilot extends Module {
         if (!safetyOverride) {
             FlightPattern currentPattern = flightPattern.get();
             if (currentPattern == FlightPattern.Drunk) {
+                // Maintain memory bounds to prevent leaks
+                if (drunkVisitedChunks.size() > 2000) {
+                    Iterator<Long> it = drunkVisitedChunks.iterator();
+                    for (int i = 0; i < 1000 && it.hasNext(); i++) {
+                        it.next();
+                        it.remove();
+                    }
+                }
                 drunkVisitedChunks.add(mc.player.getChunkPos().toLong());
                 handleDrunkMode();
             } else if (currentPattern != FlightPattern.Manual) {
@@ -867,11 +856,7 @@ public class RocketPilot extends Module {
 
     // ─── Elytra Health ───────────────────────────────────────────────────────────
     private void handleElytraHealth() {
-        boolean assistantHandling = false;
-        ElytraAssistant assistant = Modules.get().get(ElytraAssistant.class);
-        if (assistant != null && assistant.isAutoReplaceEnabled()) assistantHandling = true;
-
-        if (!assistantHandling && getDurabilityPercent() <= ELYTRA_LOW_PERCENT) {
+        if (getDurabilityPercent() <= ELYTRA_LOW_PERCENT) {
             Integer newDura = swapToFreshElytra();
             if (newDura != null) {
                 info("Auto-swapped elytra (durability was low).");
@@ -903,6 +888,11 @@ public class RocketPilot extends Module {
             if (hit.getType() == HitResult.Type.BLOCK) { obstacleDetected = true; break; }
         }
         if (!obstacleDetected) return null;
+
+        // If we are in a pattern, skip the blocked target so we don't loop into the wall
+        if (isPatternMode()) {
+            currentTarget = null;
+        }
 
         Vec3d leftDir  = fwd.rotateY(1.5f);
         Vec3d rightDir = fwd.rotateY(-1.5f);
@@ -950,7 +940,7 @@ public class RocketPilot extends Module {
         if (!mc.world.getRegistryKey().getValue().getPath().equals("the_nether")) return null;
 
         double currentY   = mc.player.getY();
-        double netherRoof = 128.0;
+        double netherRoof = netherCeilingY.get().doubleValue();
         int    buffer     = netherCeilingBuffer.get();
         double triggerY   = netherRoof - buffer;
 
@@ -1002,28 +992,13 @@ public class RocketPilot extends Module {
         if (Math.abs(diff) < 0.5) {
             calculatedPitch = 0.0f;
         } else {
-            calculatedPitch = (float) (-Math.tanh(diff / 10.0) * 45.0);
-            calculatedPitch = MathHelper.clamp(calculatedPitch, -45.0f, 40.0f);
+            calculatedPitch = (float) (-Math.tanh(diff / 10.0) * 60.0);
+            calculatedPitch = MathHelper.clamp(calculatedPitch, -60.0f, 45.0f);
         }
 
         targetPitch = calculatedPitch;
         float smooth = pitchSmoothing.get().floatValue();
         return mc.player.getPitch() + (targetPitch - mc.player.getPitch()) * smooth;
-    }
-
-    // ─── Oscillation Mode ────────────────────────────────────────────────────────
-    private Float handleOscillationMode() {
-        waveTicks++;
-        float calculatedPitch = (float) (40.0 * Math.sin(waveTicks * oscillationSpeed.get()));
-
-        if (oscillationRockets.get() && countFireworks() > 0 && calculatedPitch < -38.0f) {
-            long now = System.currentTimeMillis();
-            if (shouldFireRocket() && now - lastRocketTime >= oscillationRocketDelay.get()) {
-                fireRocket();
-                lastRocketTime = now;
-            }
-        }
-        return calculatedPitch;
     }
 
     // ─── Pitch40 Mode ────────────────────────────────────────────────────────────
@@ -1366,7 +1341,7 @@ public class RocketPilot extends Module {
         for (int i = 0; i < 9; i++) {
             if (mc.player.getInventory().getStack(i).isEmpty()) { hotbarSlot = i; break; }
         }
-        if (hotbarSlot == -1) hotbarSlot = mc.player.getInventory().selectedSlot;
+        if (hotbarSlot == -1) return; // Do not overwrite existing items
         InvUtils.move().from(invSlot).toHotbar(hotbarSlot);
     }
 

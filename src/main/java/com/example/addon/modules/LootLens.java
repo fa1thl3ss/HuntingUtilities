@@ -70,7 +70,7 @@ public class LootLens extends Module {
 
     // ─────────────────────────── Enums ───────────────────────────
 
-    public enum RenderMode { GLOW, SPECTRAL }
+    public enum RenderMode { GLOW, SPECTRAL, PULSE }
     public enum BeamStyle  { BOX, GUARDIAN }
 
     // ─────────────────────────── State ───────────────────────────
@@ -107,7 +107,6 @@ public class LootLens extends Module {
     private final SettingGroup sgStorage    = settings.createGroup("Storage");
     private final SettingGroup sgUtility    = settings.createGroup("Utility");
     private final SettingGroup sgDecorative = settings.createGroup("Decorative");
-    private final SettingGroup sgBeds       = settings.createGroup("Beds");
     private final SettingGroup sgBeam       = settings.createGroup("Beam");
 
     // ── General ──
@@ -136,20 +135,20 @@ public class LootLens extends Module {
 
     private final Setting<RenderMode> renderMode = sgGeneral.add(new EnumSetting.Builder<RenderMode>()
         .name("render-mode")
-        .description("GLOW = layered bloom boxes. SPECTRAL = spectral arrow outline for entities, subtle fill for blocks.")
+        .description("GLOW = layered bloom boxes. SPECTRAL = subtle fill. PULSE = fading in/out highlight.")
         .defaultValue(RenderMode.GLOW).build()
     );
 
     private final Setting<Integer> glowLayers = sgGeneral.add(new IntSetting.Builder()
         .name("glow-layers").description("Number of bloom layers rendered around each container.")
         .defaultValue(4).min(1).sliderMax(8)
-        .visible(() -> renderMode.get() == RenderMode.GLOW).build()
+        .visible(() -> renderMode.get() == RenderMode.GLOW || renderMode.get() == RenderMode.PULSE).build()
     );
 
     private final Setting<Double> glowSpread = sgGeneral.add(new DoubleSetting.Builder()
         .name("glow-spread").description("How far each bloom layer expands outward (in blocks).")
         .defaultValue(0.04).min(0.01).sliderMax(0.15)
-        .visible(() -> renderMode.get() == RenderMode.GLOW).build()
+        .visible(() -> renderMode.get() == RenderMode.GLOW || renderMode.get() == RenderMode.PULSE).build()
     );
 
     private final Setting<Integer> glowBaseAlpha = sgGeneral.add(new IntSetting.Builder()
@@ -168,6 +167,34 @@ public class LootLens extends Module {
     private final Setting<Boolean> spectralOutline = sgGeneral.add(new BoolSetting.Builder()
         .name("spectral-outline").description("Draw a crisp outline around block containers in SPECTRAL mode.")
         .defaultValue(true).visible(() -> renderMode.get() == RenderMode.SPECTRAL).build()
+    );
+
+    private final Setting<Double> pulseSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("pulse-speed")
+        .description("Pulse cycle speed. 1.0 = one full fade in/out per second.")
+        .defaultValue(1.0).min(0.1).max(5.0).sliderMax(3.0)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMinAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-min-alpha")
+        .description("Lowest alpha reached during the pulse (0 = invisible).")
+        .defaultValue(15).min(0).max(255).sliderMax(100)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
+    );
+
+    private final Setting<Integer> pulseMaxAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("pulse-max-alpha")
+        .description("Peak alpha reached during the pulse.")
+        .defaultValue(220).min(50).max(255).sliderMax(255)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
+    );
+
+    private final Setting<Boolean> pulseBeams = sgGeneral.add(new BoolSetting.Builder()
+        .name("pulse-beams")
+        .description("Also pulse the beam opacity in sync with the highlights.")
+        .defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.PULSE).build()
     );
 
     // ── Beam ──
@@ -288,7 +315,7 @@ public class LootLens extends Module {
     );
 
     private final Setting<Boolean> scanChestMinecarts = sgStorage.add(new BoolSetting.Builder()
-        .name("chest-minecarts").description("Detect chest minecarts (beam only shows after opening and confirming contents, or when stacking is detected).")
+        .name("chest-minecarts").description("Detect chest minecarts (highlighted immediately, beam shows if stacked or confirmed loot).")
         .defaultValue(true)
         .onChanged(v -> { if (!v) removeContainersOfType(StorageType.CHEST_MINECART); }).build()
     );
@@ -352,14 +379,12 @@ public class LootLens extends Module {
         .visible(scanItemFramesSetting::get).build()
     );
 
-    // ── Beds ──
-
-    private final Setting<Boolean> scanBeds = sgBeds.add(new BoolSetting.Builder()
+    private final Setting<Boolean> scanBeds = sgDecorative.add(new BoolSetting.Builder()
         .name("beds").description("Highlight all coloured beds in the surrounding area using their matching dye colour.")
         .defaultValue(false).build()
     );
 
-    private final Setting<Integer> bedFillAlpha = sgBeds.add(new IntSetting.Builder()
+    private final Setting<Integer> bedFillAlpha = sgDecorative.add(new IntSetting.Builder()
         .name("bed-fill-alpha").description("Fill transparency for bed highlights (0 = outline only).")
         .defaultValue(50).min(0).max(200).sliderMax(150)
         .visible(scanBeds::get).build()
@@ -409,7 +434,7 @@ public class LootLens extends Module {
         } catch (Exception ignored) { return; }
         if (++cleanupTimer >= CLEANUP_INTERVAL) { cleanupTimer = 0; cleanupDistantContainers(); }
         scanChestMinecarts(); scanItemFrames();
-        if (scanBeds.get()) scanBeds();
+        if (scanBeds.get()) scanDecorativeWorldBlocks();
         BlockPos currentPos = mc.player.getBlockPos();
         scanBlockEntities(currentPos.getX() >> 4, currentPos.getZ() >> 4);
     }
@@ -771,15 +796,17 @@ public class LootLens extends Module {
 
     // ─────────────────────────── Bed Scanning ───────────────────────────
 
-    private void scanBeds() {
+    private void scanDecorativeWorldBlocks() {
         if (mc.player == null || mc.world == null) return;
-        BlockPos playerPos   = mc.player.getBlockPos();
-        int rangeBlocks      = range.get();
-        int chunkRange       = (rangeBlocks >> 4) + 1;
-        int centerChunkX     = playerPos.getX() >> 4;
-        int centerChunkZ     = playerPos.getZ() >> 4;
-        int chunkRangeSq     = chunkRange * chunkRange;
-        int maxDistSq        = rangeBlocks * rangeBlocks;
+        if (!scanBeds.get()) return;
+
+        BlockPos playerPos = mc.player.getBlockPos();
+        int rangeBlocks    = range.get();
+        int chunkRange     = (rangeBlocks >> 4) + 1;
+        int centerChunkX   = playerPos.getX() >> 4;
+        int centerChunkZ   = playerPos.getZ() >> 4;
+        int chunkRangeSq   = chunkRange * chunkRange;
+        int maxDistSq      = rangeBlocks * rangeBlocks;
 
         bedPositions.clear();
 
@@ -794,6 +821,7 @@ public class LootLens extends Module {
                 for (int sectionIdx = 0; sectionIdx < sections.length; sectionIdx++) {
                     ChunkSection section = sections[sectionIdx];
                     if (section == null || section.isEmpty()) continue;
+
                     if (!section.hasAny(state -> state.getBlock() instanceof BedBlock)) continue;
 
                     int baseY = chunk.sectionIndexToCoord(sectionIdx) << 4;
@@ -804,14 +832,17 @@ public class LootLens extends Module {
                         for (int ly = 0; ly < 16; ly++) {
                             for (int lz = 0; lz < 16; lz++) {
                                 BlockState state = section.getBlockState(lx, ly, lz);
-                                if (!(state.getBlock() instanceof BedBlock)) continue;
-                                try {
-                                    if (state.get(BedBlock.PART) != BedPart.HEAD) continue;
-                                } catch (Exception ignored) { continue; }
+                                Block block = state.getBlock();
                                 BlockPos pos = new BlockPos(baseX + lx, baseY + ly, baseZ + lz);
                                 if (pos.getSquaredDistance(playerPos) > maxDistSq) continue;
-                                DyeColor color = ((BedBlock) state.getBlock()).getColor();
-                                bedPositions.put(pos.toImmutable(), color);
+
+                                if (block instanceof BedBlock) {
+                                    try {
+                                        if (state.get(BedBlock.PART) != BedPart.HEAD) continue;
+                                    } catch (Exception ignored) { continue; }
+                                    DyeColor color = ((BedBlock) block).getColor();
+                                    bedPositions.put(pos.toImmutable(), color);
+                                }
                             }
                         }
                     }
@@ -926,6 +957,7 @@ public class LootLens extends Module {
     private void onRender(Render3DEvent event) {
         if (mc.player == null || mc.world == null) return;
         boolean isSpectral = renderMode.get() == RenderMode.SPECTRAL;
+        boolean isPulse    = renderMode.get() == RenderMode.PULSE;
         Set<BlockPos>  toRemove             = new HashSet<>();
         Set<BlockPos>  renderedDoubleChests = new HashSet<>();
         List<BeamData> beamsToRender        = new ArrayList<>();
@@ -938,7 +970,10 @@ public class LootLens extends Module {
             StorageType type = entry.getValue();
 
             boolean shouldRender;
-            if (isImmediateHighlight(type)) {
+            if (type == StorageType.CHEST_MINECART) {
+                // Minecarts should ALWAYS highlight, even if not opened yet.
+                shouldRender = true;
+            } else if (isImmediateHighlight(type)) {
                 shouldRender = true;
             } else {
                 shouldRender = shulkerContainers.contains(pos);
@@ -949,13 +984,14 @@ public class LootLens extends Module {
 
             Box renderBox;
             SettingColor baseColor;
+            boolean isStackedMinecart = false;
 
             if (type == StorageType.CHEST_MINECART) {
-                boolean isStacked = knownStackedMinecarts.values().stream().anyMatch(st -> st.stacked && bposEquals(st.lastBlockPos, pos));
+                isStackedMinecart = knownStackedMinecarts.values().stream().anyMatch(st -> st.stacked && bposEquals(st.lastBlockPos, pos));
                 List<ChestMinecartEntity> minecarts = mc.world.getEntitiesByClass(
                     ChestMinecartEntity.class, new Box(pos), entity -> true);
                 if (minecarts.isEmpty()) {
-                    if (isStacked) {
+                    if (isStackedMinecart) {
                         renderBox = createPaddedBox(pos);
                     } else {
                         toRemove.add(pos); continue;
@@ -963,9 +999,11 @@ public class LootLens extends Module {
                 } else {
                     renderBox = getMinecartChestBox(minecarts.get(0));
                 }
-                baseColor = isStacked
-                    ? stackedMinecartColor.get()
-                    : shulkerFoundColor.get();
+                // Determine color: green if shulkers are confirmed, otherwise use standard minecart colors.
+                boolean hasShulkers = shulkerContainers.contains(pos);
+                baseColor = isStackedMinecart
+                    ? (hasShulkers ? shulkerFoundColor.get() : stackedMinecartColor.get())
+                    : (hasShulkers ? shulkerFoundColor.get() : chestMinecartColor.get());
             } else {
                 BlockState currentState = mc.world.getBlockState(pos);
                 if (!validateBlockType(currentState.getBlock(), type)) { toRemove.add(pos); continue; }
@@ -986,14 +1024,23 @@ public class LootLens extends Module {
                 int lineAlpha = (type == StorageType.CHEST_MINECART || !spectralOutline.get()) ? 0 : baseColor.a;
                 event.renderer.box(renderBox, withAlpha(baseColor, fillAlpha), withAlpha(baseColor, lineAlpha),
                     spectralOutline.get() ? ShapeMode.Both : ShapeMode.Sides, 0);
+            } else if (isPulse) {
+                renderPulseBox(event, renderBox, baseColor);
             } else {
                 renderGlowLayers(event, renderBox, baseColor);
                 event.renderer.box(renderBox, withAlpha(baseColor, 0), baseColor, ShapeMode.Lines, 0);
             }
 
-            // Exclude common blocks like Utility, Decorative, and Ender Chests from beam spam
-            if (type != StorageType.UTILITY && type != StorageType.DECORATIVE && type != StorageType.ENDER_CHEST) {
-                beamsToRender.add(new BeamData(renderBox, baseColor));
+            // Exclude common blocks like Utility, Decorative, and Ender Chests from beam spam.
+            // Single chest minecarts should also not have beams (only stacked ones do).
+            boolean shouldBeam = type != StorageType.UTILITY && type != StorageType.DECORATIVE && type != StorageType.ENDER_CHEST;
+            if (type == StorageType.CHEST_MINECART && !isStackedMinecart) {
+                shouldBeam = false;
+            }
+
+            if (shouldBeam) {
+                SettingColor beamColor = (isPulse && pulseBeams.get()) ? pulseColor(baseColor) : baseColor;
+                beamsToRender.add(new BeamData(renderBox, beamColor));
             }
         }
 
@@ -1018,11 +1065,52 @@ public class LootLens extends Module {
         }
     }
 
+    // ─────────────────────────── Pulse Rendering Helper ───────────────────────────
+
+    /** Returns a smooth 0..1 factor driven by a sine wave. */
+    private float getPulseFactor() {
+        double speed = pulseSpeed.get();
+        double t = System.currentTimeMillis() / 1000.0;
+        double phase = t * speed * Math.PI * 2.0;
+        return (float)((Math.sin(phase) + 1.0) * 0.5);
+    }
+
+    /** Map a base alpha through the pulse min/max range. */
+    private int applyPulse(int baseAlpha) {
+        float f = getPulseFactor();
+        int min = pulseMinAlpha.get();
+        int max = pulseMaxAlpha.get();
+        return Math.min(255, Math.max(0, (int)(min + (max - min) * f)));
+    }
+
+    /** Convenience: clone a colour with its alpha pulsed. */
+    private SettingColor pulseColor(SettingColor base) {
+        return withAlpha(base, applyPulse(base.a));
+    }
+
+    /** Renders a box with pulsing glow layers and outline. */
+    private void renderPulseBox(Render3DEvent event, Box box, SettingColor base) {
+        int pa = applyPulse(base.a);
+        SettingColor pColor = withAlpha(base, pa);
+        int layers = glowLayers.get();
+        double spread = glowSpread.get();
+        for (int i = layers; i >= 1; i--) {
+            double expansion = spread * i;
+            double taper = 1.0 - ((double)(i - 1) / layers) * 0.6;
+            int layerAlpha = Math.max(4, (int)(pa * taper));
+            event.renderer.box(box.expand(expansion),
+                withAlpha(pColor, layerAlpha), withAlpha(pColor, 0), ShapeMode.Sides, 0);
+        }
+        // Crisp pulsing outline + subtle pulsing fill
+        event.renderer.box(box, withAlpha(pColor, pa / 3), pColor, ShapeMode.Both, 0);
+    }
+
     // ─────────────────────────── Bed Rendering ───────────────────────────
 
     private void renderBeds(Render3DEvent event) {
         if (mc.world == null) return;
         boolean isSpectral = renderMode.get() == RenderMode.SPECTRAL;
+        boolean isPulse    = renderMode.get() == RenderMode.PULSE;
         int fill = bedFillAlpha.get();
 
         for (Map.Entry<BlockPos, DyeColor> entry : bedPositions.entrySet()) {
@@ -1057,6 +1145,8 @@ public class LootLens extends Module {
                     withAlpha(color, fill),
                     withAlpha(color, spectralOutline.get() ? color.a : 0),
                     spectralOutline.get() ? ShapeMode.Both : ShapeMode.Sides, 0);
+            } else if (isPulse) {
+                renderPulseBox(event, renderBox, color);
             } else {
                 renderGlowLayers(event, renderBox, color);
                 event.renderer.box(renderBox,
@@ -1221,13 +1311,16 @@ public class LootLens extends Module {
         if (!scanItemFramesSetting.get()) return;
         SettingColor color = itemFrameColor.get();
         boolean isSpectral = renderMode.get() == RenderMode.SPECTRAL;
+        boolean isPulse    = renderMode.get() == RenderMode.PULSE;
         for (ItemFrameEntity frame : itemFrameEntities.values()) {
             if (frame == null || frame.isRemoved()) continue;
             if (isSpectral) event.renderer.box(frame.getBoundingBox(),
                 withAlpha(color, spectralFillAlpha.get()),
                 withAlpha(color, spectralOutline.get() ? color.a : 0),
                 spectralOutline.get() ? ShapeMode.Both : ShapeMode.Sides, 0);
-            else {
+            else if (isPulse) {
+                renderPulseBox(event, frame.getBoundingBox(), color);
+            } else {
                 renderGlowLayers(event, frame.getBoundingBox(), color);
                 event.renderer.box(frame.getBoundingBox(), withAlpha(color, 0), color, ShapeMode.Lines, 0);
             }
@@ -1242,7 +1335,9 @@ public class LootLens extends Module {
                 withAlpha(color, spectralFillAlpha.get()),
                 withAlpha(color, spectralOutline.get() ? color.a : 0),
                 spectralOutline.get() ? ShapeMode.Both : ShapeMode.Sides, 0);
-            else {
+            else if (isPulse) {
+                renderPulseBox(event, frame.getBoundingBox(), color);
+            } else {
                 renderGlowLayers(event, frame.getBoundingBox(), color);
                 event.renderer.box(frame.getBoundingBox(), withAlpha(color, 0), color, ShapeMode.Lines, 0);
             }

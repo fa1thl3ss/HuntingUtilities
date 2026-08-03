@@ -65,7 +65,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
     private final SettingGroup sgGeneral   = settings.getDefaultGroup();
     private final SettingGroup sgFireworks = settings.createGroup("Firework Tracking");
     private final SettingGroup sgPearls    = settings.createGroup("Pearl Tracking");
-    private final SettingGroup sgLogouts   = settings.createGroup("Logout Tracking");
     private final SettingGroup sgItems     = settings.createGroup("Item Tracking");
     private final SettingGroup sgEntities  = settings.createGroup("Entity Tracking");
 
@@ -99,23 +98,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
         .name("show-safety-status")
         .description("Show a warning when the disconnect-on-player safety feature is armed.")
         .defaultValue(true)
-        .build()
-    );
-
-    private final Setting<Boolean> showLogouts = sgLogouts.add(new BoolSetting.Builder()
-        .name("show-logouts")
-        .description("Show the list of recent logout spots.")
-        .defaultValue(true)
-        .build()
-    );
-
-    private final Setting<Integer> maxLogoutRows = sgLogouts.add(new IntSetting.Builder()
-        .name("max-logout-rows")
-        .description("Maximum number of logout spots to list.")
-        .defaultValue(5)
-        .min(1)
-        .sliderMax(20)
-        .visible(showLogouts::get)
         .build()
     );
 
@@ -891,22 +873,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
             }
         }
 
-        // ── Gather logouts ────────────────────────────────────────────────────
-
-        List<NeighbourhoodWatch.LogoutRecord> logoutList = new ArrayList<>();
-        if (showLogouts.get() && moduleActive) {
-            String currentDim = mc.world.getRegistryKey().getValue().toString();
-            List<NeighbourhoodWatch.LogoutRecord> allLogouts = module.getLogouts();
-
-            for (int i = allLogouts.size() - 1; i >= 0; i--) {
-                NeighbourhoodWatch.LogoutRecord r = allLogouts.get(i);
-                if (r.dimension().equals(currentDim)) {
-                    logoutList.add(r);
-                    if (logoutList.size() >= maxLogoutRows.get()) break;
-                }
-            }
-        }
-
         // ── Safety armed? ─────────────────────────────────────────────────────
 
         boolean safetyArmed = moduleActive
@@ -922,10 +888,9 @@ public class NeighbourhoodWatchHUD extends HudElement {
         boolean hasPearlSection    = showPearls.get() && pearlCount > 0;
         boolean hasItemSection     = showItems.get() && itemCategory != null;
         boolean hasEntitySection   = !entityCategories.isEmpty();
-        boolean hasLogoutSection   = !logoutList.isEmpty();
         boolean hasSafetyLine      = safetyArmed;
 
-        if (!hasNearbySection && !hasFireworkSection && !hasOnlineSection && !hasLogoutSection
+        if (!hasNearbySection && !hasFireworkSection && !hasOnlineSection
                 && !hasPearlSection && !hasItemSection && !hasEntitySection && !hasSafetyLine) {
             setSize(0, 0);
             return;
@@ -1084,19 +1049,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
             }
         }
 
-        // Logout widths
-        double[] logoutRowWidths = new double[logoutList.size()];
-        if (hasLogoutSection) {
-            for (int i = 0; i < logoutList.size(); i++) {
-                NeighbourhoodWatch.LogoutRecord r = logoutList.get(i);
-                long elapsed = (System.currentTimeMillis() - r.time()) / 1000;
-                String label = String.format("%s %s %s", r.name(), module.formatPos(r.pos()), formatTime(elapsed));
-                double w = renderer.textWidth(label, false, s);
-                logoutRowWidths[i] = w;
-                maxW = Math.max(maxW, w);
-            }
-        }
-
         double safetyW = 0;
         if (hasSafetyLine) {
             safetyW = renderer.textWidth("! Safety Armed", false, s);
@@ -1104,7 +1056,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
         }
 
         // ── Count total rows ──────────────────────────────────────────────────
-        // Order: Nearby → Online → Fireworks → Pearls → Logouts → Items → Entities → Safety
+        // Order: Nearby → Online → Fireworks → Pearls → Items → Entities → Safety
 
         int lineCount = 0;
         if (hasNearbySection) {
@@ -1124,7 +1076,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
             if (pDMode == EntityDisplayMode.Category) lineCount += 1;
             lineCount += 1; // single "Ender Pearl" entry row
         }
-        if (hasLogoutSection) lineCount += logoutList.size();
         if (hasItemSection) {
             if (iDMode == EntityDisplayMode.Category) lineCount += 1;
             lineCount += itemsShown.size();
@@ -1254,18 +1205,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
                     align, totalW, pearlRowW, lineIdx,
                     "Nearby Pearls", cntStr,
                     pearlColor.get(), pearlMetaColor.get());
-            }
-        }
-
-        // ── Draw: Logouts section ─────────────────────────────────────────────
-
-        if (hasLogoutSection) {
-            for (int i = 0; i < logoutList.size(); i++) {
-                NeighbourhoodWatch.LogoutRecord r = logoutList.get(i);
-                long elapsed = (System.currentTimeMillis() - r.time()) / 1000;
-                String label = String.format("%s %s %s", r.name(), module.formatPos(r.pos()), formatTime(elapsed));
-                lineIdx = drawSingleText(renderer, s, padH, padV, rowGap, lineHeight,
-                    align, totalW, logoutRowWidths[i], lineIdx, label, enemyColor.get());
             }
         }
 
@@ -1443,16 +1382,6 @@ public class NeighbourhoodWatchHUD extends HudElement {
             case Proxy  -> "[P]";
             default     -> "[?]";
         };
-    }
-
-    private String formatTime(long totalSeconds) {
-        if (totalSeconds < 60) return totalSeconds + "s";
-        long mins = totalSeconds / 60;
-        long secs = totalSeconds % 60;
-        if (mins < 60) return mins + "m" + secs + "s";
-        long hrs = mins / 60;
-        mins = mins % 60;
-        return hrs + "h" + mins + "m";
     }
 
     private TrackedCategory buildMobCategory(List<? extends MobEntity> mobs, String label, SettingColor col) {
