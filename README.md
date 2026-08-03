@@ -6,6 +6,8 @@ Currently in **BETA** — expect bugs, incomplete features, and frequent updates
 
 Modules List;
 - Baromine
+- Chambers Assistant
+- Datamine
 - Dungeon Assistant
 - Eight To One
 - Elytra Assistant
@@ -37,6 +39,7 @@ Hud List;
 - Baromine Status
 - Motance
 - Portal Stock
+- Chambers Assistant
 - Dungeon Assistant
 - Dura Panel
 - Eight To One
