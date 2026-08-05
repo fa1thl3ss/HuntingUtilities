@@ -30,6 +30,7 @@ import net.minecraft.component.type.FoodComponent;
 import net.minecraft.component.type.ItemEnchantmentsComponent;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.Enchantments;
+import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.Item;
@@ -266,7 +267,7 @@ public class ServerHealthcareSystem extends Module {
                 if (nearest != null) {
                     bedToBreak = nearest;
                     breakTickCounter = 0;
-                    bedOriginalHotbarSlot = mc.player.getInventory().selectedSlot;
+                    bedOriginalHotbarSlot = mc.player.getInventory().getSelectedSlot();
                     info("Initiating bed breaking at %s...", nearest.toShortString());
                 } else {
                     warning("No bed found nearby to break.");
@@ -489,7 +490,7 @@ public class ServerHealthcareSystem extends Module {
                 return;
             }
 
-            if (mc.player.getPos().distanceTo(Vec3d.ofCenter(bedToBreak)) > 6.0) {
+            if (mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(bedToBreak)) > 6.0) {
                 warning("Too far from bed, stopping breaking.");
                 bedToBreak = null;
                 if (bedOriginalHotbarSlot != -1) {
@@ -501,9 +502,9 @@ public class ServerHealthcareSystem extends Module {
 
             int bestToolSlot = findBestTool(bedToBreak);
 
-            if (bestToolSlot != -1 && mc.player.getInventory().selectedSlot != bestToolSlot) {
+            if (bestToolSlot != -1 && mc.player.getInventory().getSelectedSlot() != bestToolSlot) {
                 if (bedOriginalHotbarSlot == -1) {
-                    bedOriginalHotbarSlot = mc.player.getInventory().selectedSlot;
+                    bedOriginalHotbarSlot = mc.player.getInventory().getSelectedSlot();
                 }
                 InvUtils.swap(bestToolSlot, false);
             }
@@ -584,7 +585,7 @@ public class ServerHealthcareSystem extends Module {
             if (moveWaitTicks == 0) {
                 ItemStack hotbarStack = mc.player.getInventory().getStack(eatHotbarSlot);
                 if (eatTargetItem != null && hotbarStack.isOf(eatTargetItem)) {
-                    mc.player.getInventory().selectedSlot = eatHotbarSlot;
+                    mc.player.getInventory().setSelectedSlot(eatHotbarSlot);
                     eatTicksRemaining = hotbarStack.getItem().getMaxUseTime(hotbarStack, mc.player);
                     eatStartupTicks = 3;
                     mc.options.useKey.setPressed(true);
@@ -632,12 +633,12 @@ public class ServerHealthcareSystem extends Module {
                 }
             }
 
-            eatOriginalHotbarSlot = mc.player.getInventory().selectedSlot;
+            eatOriginalHotbarSlot = mc.player.getInventory().getSelectedSlot();
 
             if (foodSlot < 9) {
                 // Already in hotbar, start eating immediately
                 eatHotbarSlot = foodSlot;
-                mc.player.getInventory().selectedSlot = eatHotbarSlot;
+                mc.player.getInventory().setSelectedSlot(eatHotbarSlot);
                 eatTicksRemaining = foodStack.getItem().getMaxUseTime(foodStack, mc.player);
                 eatStartupTicks = 3;
                 mc.options.useKey.setPressed(true);
@@ -659,7 +660,7 @@ public class ServerHealthcareSystem extends Module {
         } else {
             if (eatStartupTicks > 0) {
                 eatStartupTicks--;
-                mc.player.getInventory().selectedSlot = eatHotbarSlot;
+                mc.player.getInventory().setSelectedSlot(eatHotbarSlot);
                 mc.options.useKey.setPressed(true);
                 if (eatTicksRemaining > 0) eatTicksRemaining--;
                 return;
@@ -678,7 +679,7 @@ public class ServerHealthcareSystem extends Module {
                 return;
             }
 
-            mc.player.getInventory().selectedSlot = eatHotbarSlot;
+            mc.player.getInventory().setSelectedSlot(eatHotbarSlot);
             mc.options.useKey.setPressed(true);
 
             // ANTI-INTERRUPT: If we get hit, vanilla server cancels the eat.
@@ -888,12 +889,9 @@ public class ServerHealthcareSystem extends Module {
         if (attrs != null) {
             for (var entry : attrs.modifiers()) {
                 if (entry == null || entry.attribute() == null || entry.modifier() == null) continue;
-                var keyOpt = entry.attribute().getKey();
-                if (keyOpt == null || keyOpt.isEmpty()) continue;
-                String id = keyOpt.get().getValue().toString();
-                double v  = entry.modifier().value();
-                if      (id.equals("minecraft:generic.armor"))           armor     += v;
-                else if (id.equals("minecraft:generic.armor_toughness")) toughness += v;
+                double v = entry.modifier().value();
+                if      (entry.attribute() == EntityAttributes.ARMOR)           armor     += v;
+                else if (entry.attribute() == EntityAttributes.ARMOR_TOUGHNESS) toughness += v;
             }
         }
 
@@ -908,7 +906,7 @@ public class ServerHealthcareSystem extends Module {
     private int countTotems() {
         if (mc.player == null) return 0;
         int count = 0;
-        for (ItemStack stack : mc.player.getInventory().main) {
+        for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
             if (stack.isOf(Items.TOTEM_OF_UNDYING)) count += stack.getCount();
         }
         if (mc.player.getOffHandStack().isOf(Items.TOTEM_OF_UNDYING))

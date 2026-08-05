@@ -284,7 +284,7 @@ public class SecondLifeHUD extends HudElement {
 
         // Play alert sound if count drops into warning/critical range
         if (lastCount != -1 && count < lastCount && count <= warningCount.get() && playSound.get()) {
-            mc.player.playSound(net.minecraft.sound.SoundEvents.ENTITY_ITEM_BREAK, 1f, 0.5f);
+            mc.player.playSound(net.minecraft.sound.SoundEvents.ENTITY_ITEM_BREAK.value(), 1f, 0.5f);
         }
         lastCount = count;
 
@@ -436,10 +436,15 @@ public class SecondLifeHUD extends HudElement {
         var inv = mc.player.getInventory();
         int total = 0;
 
-        for (var list : java.util.List.of(inv.main, inv.offHand, inv.armor)) {
-            for (ItemStack s : list) {
-                if (s.isOf(Items.TOTEM_OF_UNDYING)) total += s.getCount();
-            }
+        for (ItemStack s : inv.getMainStacks()) {
+            if (s.isOf(Items.TOTEM_OF_UNDYING)) total += s.getCount();
+        }
+        for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[]{
+                net.minecraft.entity.EquipmentSlot.OFFHAND,
+                net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
+                net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
+            ItemStack s = mc.player.getEquippedStack(slot);
+            if (s.isOf(Items.TOTEM_OF_UNDYING)) total += s.getCount();
         }
 
         if (mc.player.currentScreenHandler != null) {

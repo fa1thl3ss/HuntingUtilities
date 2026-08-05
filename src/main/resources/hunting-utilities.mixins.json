@@ -29,6 +29,7 @@
     "LivingEntityRendererMixin",
     "MixinSignBlockEntityRenderer",
     "PlayerEntityRendererMixin",
+    "PlayerListHudMixin",
     "RocketPilotInputMixin",
     "RocketPilotMixin",
     "ServerHealthcareSystemMixin",

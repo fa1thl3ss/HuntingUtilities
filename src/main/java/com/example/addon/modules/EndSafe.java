@@ -363,8 +363,9 @@ public class EndSafe extends Module {
                 info("§cDisconnected — Y §e" + String.format("%.1f", playerY)
                     + " §cis below safe threshold §e(" + effectiveDisconnectY + ")§c.");
 
-                mc.world.disconnect();
-                mc.disconnect();
+                net.minecraft.text.Text reason = net.minecraft.text.Text.literal("[EndSafe] Y below safe threshold");
+                mc.world.disconnect(reason);
+                mc.disconnect(reason);
             }
             return;
         } else {
@@ -413,7 +414,7 @@ public class EndSafe extends Module {
         if (mc.player == null) return false;
         for (int i = 0; i < 9; i++) {
             if (mc.player.getInventory().getStack(i).isOf(item)) {
-                mc.player.getInventory().selectedSlot = i;
+                mc.player.getInventory().setSelectedSlot(i);
                 return true;
             }
         }

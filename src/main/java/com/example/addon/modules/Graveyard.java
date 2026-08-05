@@ -252,7 +252,7 @@ public class Graveyard extends Module {
                 ? enchantedBeamColor.get()
                 : beamColor.get();
 
-            Vec3d pos  = item.getPos();
+            Vec3d pos  = item.getEntityPos();
             Box   beam = new Box(
                 pos.x - halfWidth, pos.y, pos.z - halfWidth,
                 pos.x + halfWidth, topOfWorld, pos.z + halfWidth
@@ -262,7 +262,7 @@ public class Graveyard extends Module {
 
         for (ExperienceOrbEntity orb : xpOrbsToRender) {
             SettingColor c = xpBeamColor.get();
-            Vec3d pos  = orb.getPos();
+            Vec3d pos  = orb.getEntityPos();
             Box   beam = new Box(
                 pos.x - halfWidth, pos.y, pos.z - halfWidth,
                 pos.x + halfWidth, topOfWorld, pos.z + halfWidth

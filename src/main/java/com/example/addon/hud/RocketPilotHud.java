@@ -424,7 +424,7 @@ public class RocketPilotHud extends HudElement {
 
             // Find a valid elytra to show as icon
             double threshold = elytraDurabilityThreshold.get();
-            for (ItemStack stack : mc.player.getInventory().main) {
+            for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
                 if (isValidElytra(stack, threshold)) { elytraStack = stack; break; }
             }
             if (elytraStack.isEmpty()) {
@@ -828,7 +828,7 @@ public class RocketPilotHud extends HudElement {
         int count = 0;
         double threshold = elytraDurabilityThreshold.get();
 
-        for (ItemStack stack : mc.player.getInventory().main) {
+        for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
             if (isValidElytra(stack, threshold)) count++;
         }
         if (isValidElytra(mc.player.getEquippedStack(EquipmentSlot.CHEST), threshold)) count++;

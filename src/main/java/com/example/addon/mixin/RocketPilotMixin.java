@@ -5,7 +5,7 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.render.Camera;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
-import net.minecraft.world.BlockView;
+import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -15,14 +15,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Camera.class)
 public abstract class RocketPilotMixin {
     @Shadow protected abstract void setPos(double x, double y, double z);
-    @Shadow public abstract net.minecraft.util.math.Vec3d getPos();
+    @Shadow public abstract net.minecraft.util.math.Vec3d getCameraPos();
 
     @Inject(method = "update", at = @At("RETURN"))
-    private void onUpdate(BlockView area, Entity focusedEntity, boolean thirdPerson, boolean inverseView, float tickDelta, CallbackInfo ci) {
+    private void onUpdate(World area, Entity focusedEntity, boolean thirdPerson, boolean inverseView, float tickDelta, CallbackInfo ci) {
         RocketPilot rocketPilot = Modules.get().get(RocketPilot.class);
         if (rocketPilot != null && rocketPilot.isActive() && rocketPilot.useFreeLookY.get()) {
             if (focusedEntity instanceof LivingEntity living && living.isGliding()) {
-                setPos(getPos().x, rocketPilot.freeLookY.get(), getPos().z);
+                setPos(getCameraPos().x, rocketPilot.freeLookY.get(), getCameraPos().z);
             }
         }
     }

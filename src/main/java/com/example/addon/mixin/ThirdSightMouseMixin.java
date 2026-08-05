@@ -35,7 +35,7 @@ public class ThirdSightMouseMixin {
         double dx = cursorDeltaX * scale;
         double dy = cursorDeltaY * scale;
 
-        if (client.options.getInvertYMouse().getValue()) dy = -dy;
+        if (client.options.getInvertMouseY().getValue()) dy = -dy;
 
         module.cameraYaw  += (float) dx;
         module.cameraPitch = Math.max(-90.0f, Math.min(90.0f, module.cameraPitch + (float) dy));

@@ -523,7 +523,7 @@ public class PortalTracker extends Module {
     private void processNewDiscovery(BlockPos pos, PortalType type, String dimensionId) {
         if (autoMarkRange.get() <= 0 || mc.player == null) return;
         if (type != PortalType.NETHER) return;
-        if (pos.getSquaredDistance(mc.player.getPos()) > (double) autoMarkRange.get() * autoMarkRange.get()) return;
+        if (pos.getSquaredDistance(mc.player.getEntityPos()) > (double) autoMarkRange.get() * autoMarkRange.get()) return;
         if (exclusionTimer > 0 && entryPortalPos != null
                 && pos.getSquaredDistance(entryPortalPos) <= ENTRY_EXCLUSION_RADIUS_SQ) return;
         boolean added = createdPortals.add(pos);
@@ -732,7 +732,7 @@ public class PortalTracker extends Module {
     private void onBlockUpdate(BlockUpdateEvent event) {
         if (mc.player == null || mc.world == null) return;
         double threshold = range.get() * 16.0 + 32;
-        if (event.pos.getSquaredDistance(mc.player.getPos()) > threshold * threshold) return;
+        if (event.pos.getSquaredDistance(mc.player.getEntityPos()) > threshold * threshold) return;
         boolean wasPortal = isTrackedPortalBlock(event.oldState.getBlock());
         boolean isPortal  = isTrackedPortalBlock(event.newState.getBlock());
 

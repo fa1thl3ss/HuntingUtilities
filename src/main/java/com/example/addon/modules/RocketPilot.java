@@ -1063,7 +1063,7 @@ public class RocketPilot extends Module {
         if (paused) return;
 
         if (flightPattern.get() != FlightPattern.Manual && flightPattern.get() != FlightPattern.Drunk) {
-            if (origin == null) origin = mc.player.getPos();
+            if (origin == null) origin = mc.player.getEntityPos();
 
             if (currentTarget == null) {
                 calculateNextTarget();
@@ -1102,7 +1102,7 @@ public class RocketPilot extends Module {
     }
 
     private void calculateNextTarget() {
-        if (origin == null) origin = mc.player.getPos();
+        if (origin == null) origin = mc.player.getEntityPos();
 
         double targetYValue  = useTargetY.get() ? targetY.get() : mc.player.getY();
         double nextX, nextZ;

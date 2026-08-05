@@ -30,9 +30,9 @@ import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.Packet;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 import net.minecraft.network.packet.c2s.play.HandSwingC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerInputC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
@@ -292,7 +292,7 @@ public class ObsidianFist extends Module {
 
         BlockPos pos = hit.getBlockPos();
         if (mc.player.squaredDistanceTo(pos.toCenterPos()) > range.get() * range.get()) return;
-        if (prevSlot == -1) prevSlot = mc.player.getInventory().selectedSlot;
+        if (prevSlot == -1) prevSlot = mc.player.getInventory().getSelectedSlot();
 
         if (mc.world.getBlockState(pos).getBlock() == Blocks.ENDER_CHEST) {
             // Existing chest — mine it directly and enter the break loop.
@@ -354,7 +354,7 @@ public class ObsidianFist extends Module {
 
         if (useOffhand) {
             // Pickaxe in main hand, chest in offhand — just ensure pickaxe selected.
-            if (mc.player.getInventory().selectedSlot != pickaxe.slot())
+            if (mc.player.getInventory().getSelectedSlot() != pickaxe.slot())
                 selectSlot(pickaxe.slot());
             doPlace(Hand.OFF_HAND);
         } else {
@@ -596,7 +596,7 @@ public class ObsidianFist extends Module {
         sendRotation(placeTarget);
 
         boolean sneak = !mc.player.isSneaking() && isClickable(mc.world.getBlockState(placeTarget).getBlock());
-        if (sneak) send(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.PRESS_SHIFT_KEY));
+        if (sneak) send(new PlayerInputC2SPacket(sneakInput(true)));
 
         BlockHitResult hit = new BlockHitResult(
             new Vec3d(
@@ -610,7 +610,12 @@ public class ObsidianFist extends Module {
         send(new PlayerInteractBlockC2SPacket(hand, hit, 0));
         send(new HandSwingC2SPacket(hand));
 
-        if (sneak) send(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.RELEASE_SHIFT_KEY));
+        if (sneak) send(new PlayerInputC2SPacket(sneakInput(false)));
+    }
+
+    private net.minecraft.util.PlayerInput sneakInput(boolean sneaking) {
+        net.minecraft.util.PlayerInput cur = mc.player.input.playerInput;
+        return new net.minecraft.util.PlayerInput(cur.forward(), cur.backward(), cur.left(), cur.right(), cur.jump(), sneaking, cur.sprint());
     }
 
     // ── Compatibility ─────────────────────────────────────────────────────────
@@ -670,7 +675,7 @@ public class ObsidianFist extends Module {
     /** Selects a hotbar slot on both client and server. */
     private void selectSlot(int slot) {
         if (slot < 0 || slot > 8) return;
-        mc.player.getInventory().selectedSlot = slot;
+        mc.player.getInventory().setSelectedSlot(slot);
         send(new UpdateSelectedSlotC2SPacket(slot));
     }
 

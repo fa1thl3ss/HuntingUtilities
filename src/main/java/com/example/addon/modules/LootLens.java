@@ -36,13 +36,10 @@ import net.minecraft.block.ShulkerBoxBlock;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.enums.BedPart;
 import net.minecraft.block.enums.ChestType;
-import net.minecraft.client.gl.ShaderProgramKeys;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.client.render.BufferBuilder;
-import net.minecraft.client.render.BufferRenderer;
 import net.minecraft.client.render.Tessellator;
-import net.minecraft.client.render.VertexFormat;
 import net.minecraft.client.render.VertexFormats;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.decoration.GlowItemFrameEntity;
@@ -621,7 +618,7 @@ public class LootLens extends Module {
             UUID clusterId = null;
             
             for (ChestMinecartEntity m : cluster) {
-                centroid = centroid.add(m.getPos());
+                centroid = centroid.add(m.getEntityPos());
                 currentMinecartPositions.add(m.getBlockPos());
                 containers.putIfAbsent(m.getBlockPos(), StorageType.CHEST_MINECART);
                 if (clusterId == null || m.getUuid().compareTo(clusterId) < 0) {
@@ -780,7 +777,7 @@ public class LootLens extends Module {
             boolean isShulker = heldStack.getItem() instanceof BlockItem bi && bi.getBlock() instanceof ShulkerBoxBlock;
             boolean isCustom  = customItems.get().contains(heldStack.getItem());
             if (!isShulker && !isCustom) continue;
-            Vec3d pos = frame.getPos(); currentFramePositions.add(pos);
+            Vec3d pos = frame.getEntityPos(); currentFramePositions.add(pos);
             if (frame instanceof GlowItemFrameEntity glow) glowItemFrameEntities.put(pos, glow);
             else itemFrameEntities.put(pos, frame);
             if (notifiedItemFrames.add(pos) && notification.get()) {
@@ -1221,61 +1218,23 @@ public class LootLens extends Module {
         double rotationRad = (System.currentTimeMillis() % (long)(6000.0 / speed))
                              / (6000.0 / speed) * Math.PI * 2.0;
 
-        Vec3d camPos = mc.gameRenderer.getCamera().getPos();
-        double camX  = camPos.x, camY = camPos.y, camZ = camPos.z;
-
-        float r       = color.r / 255f;
-        float g       = color.g / 255f;
-        float b       = color.b / 255f;
-        float strandA = guardianStrandAlpha.get() / 255f;
-
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.disableDepthTest();
-        RenderSystem.disableCull();
-        RenderSystem.setShader(ShaderProgramKeys.POSITION_COLOR);
-
-        MatrixStack matrices = new MatrixStack();
-        matrices.push();
-
-        Tessellator tessellator = Tessellator.getInstance();
-        BufferBuilder buf = tessellator.begin(
-            VertexFormat.DrawMode.TRIANGLES, VertexFormats.POSITION_COLOR);
-
-        org.joml.Matrix4f matrix = matrices.peek().getPositionMatrix();
-
-        double relCx  = cx      - camX;
-        double relCz  = cz      - camZ;
-        double relBot = worldBot - camY;
-        double relTop = worldTop - camY;
+        SettingColor strandColor = withAlpha(color, guardianStrandAlpha.get());
 
         for (int i = 0; i < strands; i++) {
             double angle = rotationRad + (Math.PI * 2.0 / strands) * i;
             double cos   = Math.cos(angle);
             double sin   = Math.sin(angle);
 
-            double lx = relCx + cos * radius, lz = relCz + sin * radius;
-            double rx = relCx - cos * radius, rz = relCz - sin * radius;
+            double lx = cx + cos * radius, lz = cz + sin * radius;
+            double rx = cx - cos * radius, rz = cz - sin * radius;
 
-            float lxf = (float) lx, lzf = (float) lz;
-            float rxf = (float) rx, rzf = (float) rz;
-            float botF = (float) relBot, topF = (float) relTop;
-
-            buf.vertex(matrix, lxf, botF, lzf).color(r, g, b, strandA);
-            buf.vertex(matrix, rxf, botF, rzf).color(r, g, b, strandA);
-            buf.vertex(matrix, lxf, topF, lzf).color(r, g, b, strandA);
-
-            buf.vertex(matrix, rxf, botF, rzf).color(r, g, b, strandA);
-            buf.vertex(matrix, rxf, topF, rzf).color(r, g, b, strandA);
-            buf.vertex(matrix, lxf, topF, lzf).color(r, g, b, strandA);
+            event.renderer.quad(
+                lx, worldBot, lz,
+                rx, worldBot, rz,
+                rx, worldTop, rz,
+                lx, worldTop, lz,
+                strandColor);
         }
-
-        BufferRenderer.drawWithGlobalProgram(buf.end());
-        matrices.pop();
-
-        RenderSystem.enableDepthTest();
-        RenderSystem.enableCull();
-        RenderSystem.disableBlend();
 
         int coreAlpha = guardianCoreAlpha.get();
         if (coreAlpha > 0) {

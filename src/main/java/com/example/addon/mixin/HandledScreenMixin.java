@@ -178,23 +178,16 @@ public abstract class HandledScreenMixin extends Screen {
         ButtonWidget btn = new ButtonWidget(x, y, width, height, label, action,
                 textSupplier -> textSupplier.get().copy()) {
             @Override
-            public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+            public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
                 return false;
             }
             @Override
-            public boolean keyReleased(int keyCode, int scanCode, int modifiers) {
+            public boolean keyReleased(net.minecraft.client.input.KeyInput input) {
                 return false;
             }
             @Override
-            protected void renderWidget(DrawContext context, int mouseX, int mouseY, float delta) {
-                if (hasData != null) {
-                    boolean prev = this.active;
-                    this.active = hasData.getAsBoolean();
-                    super.renderWidget(context, mouseX, mouseY, delta);
-                    this.active = prev;
-                } else {
-                    super.renderWidget(context, mouseX, mouseY, delta);
-                }
+            protected void drawIcon(DrawContext context, int mouseX, int mouseY, float delta) {
+                if (hasData != null) this.active = hasData.getAsBoolean();
             }
         };
         if (tooltip != null) btn.setTooltip(tooltip);

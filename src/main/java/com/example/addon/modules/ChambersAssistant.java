@@ -475,7 +475,7 @@ public class ChambersAssistant extends Module {
         if (drinkTimer > 0) {
             mc.options.useKey.setPressed(false);
             if (previousDrinkSlot != -1 && mc.player != null) {
-                mc.player.getInventory().selectedSlot = previousDrinkSlot;
+                mc.player.getInventory().setSelectedSlot(previousDrinkSlot);
             }
         }
         GlowingRegistry.clear();
@@ -651,7 +651,7 @@ public class ChambersAssistant extends Module {
                 for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
                     TargetType type = entry.getValue();
                     if (type == TargetType.EJECTING_TRIAL_SPAWNER || type == TargetType.EJECTING_OMINOUS_SPAWNER || type == TargetType.EJECTING_VAULT) {
-                        if (entry.getKey().isWithinDistance(item.getPos(), 2.0)) {
+                        if (entry.getKey().isWithinDistance(item.getEntityPos(), 2.0)) {
                             info("§bReward Ejected: §e" + item.getStack().getName().getString() + "§b!");
                             playAlert();
                             break;
@@ -858,8 +858,8 @@ public class ChambersAssistant extends Module {
                 .filter(e -> e.getValue() == TargetType.VAULT || e.getValue() == TargetType.OMINOUS_VAULT)
                 .map(Map.Entry::getKey)
                 .filter(pos -> !checkedContainers.contains(pos))
-                .filter(pos -> Math.sqrt(pos.getSquaredDistance(mc.player.getPos())) <= 4.5)
-                .sorted(Comparator.comparingDouble(pos -> pos.getSquaredDistance(mc.player.getPos())))
+                .filter(pos -> Math.sqrt(pos.getSquaredDistance(mc.player.getEntityPos())) <= 4.5)
+                .sorted(Comparator.comparingDouble(pos -> pos.getSquaredDistance(mc.player.getEntityPos())))
                 .toList();
 
             if (!nearbyVaults.isEmpty()) {
@@ -902,7 +902,7 @@ public class ChambersAssistant extends Module {
             if (drinkTimer > 0) {
                 mc.options.useKey.setPressed(false);
                 if (previousDrinkSlot != -1 && mc.player != null) {
-                    mc.player.getInventory().selectedSlot = previousDrinkSlot;
+                    mc.player.getInventory().setSelectedSlot(previousDrinkSlot);
                     previousDrinkSlot = -1;
                 }
                 drinkTimer = 0;
@@ -913,22 +913,22 @@ public class ChambersAssistant extends Module {
         boolean hasOmen = mc.player.hasStatusEffect(StatusEffects.BAD_OMEN) || mc.player.hasStatusEffect(StatusEffects.TRIAL_OMEN);
         
         boolean hasNearbySpawner = targets.entrySet().stream()
-            .anyMatch(e -> e.getValue() == TargetType.TRIAL_SPAWNER && e.getKey().isWithinDistance(mc.player.getPos(), 8.0));
+            .anyMatch(e -> e.getValue() == TargetType.TRIAL_SPAWNER && e.getKey().isWithinDistance(mc.player.getEntityPos(), 8.0));
 
         if (drinkTimer == 0 && !hasOmen && hasNearbySpawner && mc.currentScreen == null) {
             int bottleSlot = findOminousBottle();
             if (bottleSlot != -1) {
-                previousDrinkSlot = mc.player.getInventory().selectedSlot;
-                mc.player.getInventory().selectedSlot = bottleSlot;
+                previousDrinkSlot = mc.player.getInventory().getSelectedSlot();
+                mc.player.getInventory().setSelectedSlot(bottleSlot);
                 mc.options.useKey.setPressed(true);
                 drinkTimer = 40;
             }
         } else if (drinkTimer > 0) {
             drinkTimer--;
-            if (hasOmen || drinkTimer == 0 || mc.player.getInventory().getStack(mc.player.getInventory().selectedSlot).getItem() != Items.OMINOUS_BOTTLE) {
+            if (hasOmen || drinkTimer == 0 || mc.player.getInventory().getStack(mc.player.getInventory().getSelectedSlot()).getItem() != Items.OMINOUS_BOTTLE) {
                 mc.options.useKey.setPressed(false);
                 if (previousDrinkSlot != -1) {
-                    mc.player.getInventory().selectedSlot = previousDrinkSlot;
+                    mc.player.getInventory().setSelectedSlot(previousDrinkSlot);
                     previousDrinkSlot = -1;
                 }
                 drinkTimer = 0;
@@ -1046,7 +1046,7 @@ public class ChambersAssistant extends Module {
         for (net.minecraft.entity.Entity entity : entities) {
             if (!entity.isAlive()) continue;
             Box box = entity.getBoundingBox();
-            Vec3d pos = entity.getPos();
+            Vec3d pos = entity.getEntityPos();
             Box beamBox = renderBeam ? new Box(
                 pos.x - beamSize, pos.y, pos.z - beamSize,
                 pos.x + beamSize, mc.world.getHeight(), pos.z + beamSize

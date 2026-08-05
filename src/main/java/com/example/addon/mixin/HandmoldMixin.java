@@ -3,7 +3,7 @@ package com.example.addon.mixin;
 import com.example.addon.modules.Handmold;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.client.render.VertexConsumerProvider;
+import net.minecraft.client.render.command.OrderedRenderCommandQueue;
 import net.minecraft.client.render.item.HeldItemRenderer;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.component.DataComponentTypes;
@@ -36,7 +36,7 @@ public abstract class HandmoldMixin {
         ItemStack item,
         float equipProgress,
         MatrixStack matrices,
-        VertexConsumerProvider vertexConsumers,
+        OrderedRenderCommandQueue queue,
         int light,
         CallbackInfo ci
     ) {
@@ -123,7 +123,7 @@ public abstract class HandmoldMixin {
             ((HeldItemRendererAccessor)(Object)this).invokeRenderFirstPersonItem(
                 player, tickDelta, pitch, hand,
                 isCentering ? 0.0f : swingProgress,
-                item, equipProgress, matrices, vertexConsumers, light
+                item, equipProgress, matrices, queue, light
             );
         } finally {
             RENDERING_CENTERED.set(false);

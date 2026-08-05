@@ -415,7 +415,7 @@ public class InspectorGadget extends Module {
         currentPathTarget = pathTiles.get(tileIndex);
         BlockPos standPos = currentPathTarget.up(); // Stand on top of the tile
         Vec3d targetPos = Vec3d.ofCenter(standPos);
-        double distance = mc.player.getPos().distanceTo(targetPos);
+        double distance = mc.player.getEntityPos().distanceTo(targetPos);
 
         pathTimeout++;
         if (pathTimeout > 1000) { // 50 seconds timeout
@@ -478,7 +478,7 @@ public class InspectorGadget extends Module {
         // Greedy nearest-neighbour sort from the player's current position to avoid zigzag.
         List<BlockPos> ordered = new ArrayList<>();
         Set<BlockPos> remaining = new HashSet<>(localTargets);
-        Vec3d cursor = mc.player.getPos();
+        Vec3d cursor = mc.player.getEntityPos();
         while (!remaining.isEmpty()) {
             BlockPos nearest = null;
             double nearestDist = Double.MAX_VALUE;
@@ -516,7 +516,7 @@ public class InspectorGadget extends Module {
             return;
         }
 
-        double distanceToChest = mc.player.getPos().distanceTo(Vec3d.ofCenter(blockTarget));
+        double distanceToChest = mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(blockTarget));
 
         if (currentInteractTile == null || !isStandable(currentInteractTile)) {
             currentInteractTile = null;
@@ -554,7 +554,7 @@ public class InspectorGadget extends Module {
         }
 
         Vec3d targetPos = Vec3d.ofCenter(currentInteractTile);
-        double distanceToTile = mc.player.getPos().distanceTo(targetPos);
+        double distanceToTile = mc.player.getEntityPos().distanceTo(targetPos);
 
         pathTimeout++;
         if (pathTimeout > 1000) { // 50 seconds timeout

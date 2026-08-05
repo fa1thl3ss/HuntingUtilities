@@ -572,7 +572,7 @@ public class Datamine extends Module {
 
     private float delta(Target target) {
         PlayerInventory inv = this.mc.player.getInventory();
-        int selected = inv.selectedSlot;
+        int selected = inv.getSelectedSlot();
 
         inv.setSelectedSlot(target.slot);
 
@@ -586,7 +586,7 @@ public class Datamine extends Module {
 
     private int best(BlockState state, BlockPos pos) {
         PlayerInventory inv = this.mc.player.getInventory();
-        int selected = inv.selectedSlot;
+        int selected = inv.getSelectedSlot();
         int best = selected;
 
         float speed = -1;
@@ -639,7 +639,7 @@ public class Datamine extends Module {
 
     private void select(int slot) {
         PlayerInventory inv = this.mc.player.getInventory();
-        if (inv.selectedSlot == slot) return;
+        if (inv.getSelectedSlot() == slot) return;
 
         inv.setSelectedSlot(slot);
 

@@ -641,7 +641,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
 
         if (moduleActive && showOnline.get() && mc.getNetworkHandler() != null) {
             for (PlayerListEntry entry : mc.getNetworkHandler().getPlayerList()) {
-                String name = entry.getProfile().getName();
+                String name = entry.getProfile().name();
                 if (name == null || name.isEmpty()) continue;
                 switch (module.getPlayerStatusPublic(name)) {
                     case Friend -> onlineFriendNames.add(name);
@@ -671,7 +671,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 FireworkRocketEntity.class, fBox, e -> true);
 
             for (FireworkRocketEntity rocket : rockets) {
-                float dist = (float) mc.player.getPos().distanceTo(rocket.getPos());
+                float dist = (float) mc.player.getEntityPos().distanceTo(rocket.getEntityPos());
                 if (dist > fRange) continue;
 
                 String label;
@@ -708,7 +708,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
             Box pBox = playerBox(pRange);
 
             for (Entity e : mc.world.getEntitiesByClass(Entity.class, pBox, en -> en.getType() == EntityType.ENDER_PEARL)) {
-                float dist = (float) mc.player.getPos().distanceTo(e.getPos());
+                float dist = (float) mc.player.getEntityPos().distanceTo(e.getEntityPos());
                 if (dist > pRange) continue;
                 pearlCount++;
                 if (dist < pearlNearest) pearlNearest = dist;
@@ -732,7 +732,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 ItemStack stack = itemEntity.getStack();
                 if (stack.isEmpty()) continue;
 
-                float dist = (float) mc.player.getPos().distanceTo(itemEntity.getPos());
+                float dist = (float) mc.player.getEntityPos().distanceTo(itemEntity.getEntityPos());
                 if (dist > range) continue;
 
                 String itemName = stack.getName().getString();
@@ -782,7 +782,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 if (!crystals.isEmpty()) {
                     float nearest = Float.MAX_VALUE;
                     for (EndCrystalEntity e : crystals) {
-                        float d = (float) mc.player.getPos().distanceTo(e.getPos());
+                        float d = (float) mc.player.getEntityPos().distanceTo(e.getEntityPos());
                         if (d < nearest) nearest = d;
                     }
                     List<TrackedEntry> entries = List.of(
@@ -801,7 +801,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
                 if (!carts.isEmpty()) {
                     float nearest = Float.MAX_VALUE;
                     for (ChestMinecartEntity e : carts) {
-                        float d = (float) mc.player.getPos().distanceTo(e.getPos());
+                        float d = (float) mc.player.getEntityPos().distanceTo(e.getEntityPos());
                         if (d < nearest) nearest = d;
                     }
                     List<TrackedEntry> entries = List.of(
@@ -828,7 +828,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
 
                     for (var e : vehicles) {
                         String typeName = e.getType().getName().getString();
-                        float  dist     = (float) mc.player.getPos().distanceTo(e.getPos());
+                        float  dist     = (float) mc.player.getEntityPos().distanceTo(e.getEntityPos());
                         vCountMap.computeIfAbsent(typeName, k -> new int[]{0})[0]++;
                         vDistMap.computeIfAbsent(typeName, k -> new float[]{Float.MAX_VALUE});
                         if (dist < vDistMap.get(typeName)[0]) vDistMap.get(typeName)[0] = dist;
@@ -1393,7 +1393,7 @@ public class NeighbourhoodWatchHUD extends HudElement {
 
         for (MobEntity e : mobs) {
             String typeName = e.getType().getName().getString();
-            float dist = (float) mc.player.getPos().distanceTo(e.getPos());
+            float dist = (float) mc.player.getEntityPos().distanceTo(e.getEntityPos());
             countMap.computeIfAbsent(typeName, k -> new int[]{0})[0]++;
             distMap.computeIfAbsent(typeName, k -> new float[]{Float.MAX_VALUE});
             if (dist < distMap.get(typeName)[0]) distMap.get(typeName)[0] = dist;

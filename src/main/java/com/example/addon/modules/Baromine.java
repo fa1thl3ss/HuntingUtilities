@@ -41,9 +41,8 @@ import net.minecraft.item.HoeItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.item.PickaxeItem;
+import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.item.ShovelItem;
-import net.minecraft.item.SwordItem;
 import net.minecraft.network.DisconnectionInfo;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.registry.Registries;
@@ -967,7 +966,7 @@ public class Baromine extends Module {
             }
         }
 
-        if (goldenHelmet.get() && mc.player.getInventory().getArmorStack(3).getItem() != Items.GOLDEN_HELMET) {
+        if (goldenHelmet.get() && mc.player.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD).getItem() != Items.GOLDEN_HELMET) {
             stopBaritoneSafely("Golden Helmet is not equipped!");
             return;
         }
@@ -1152,7 +1151,7 @@ public class Baromine extends Module {
                 }
 
                 int plankCount = 0;
-                for (ItemStack stack : mc.player.getInventory().main) {
+                for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
                     if (isPlank(stack.getItem())) plankCount += stack.getCount();
                 }
 
@@ -1429,7 +1428,7 @@ public class Baromine extends Module {
                 }
 
                 if (targetTable != null) {
-                    Vec3d itemPos = targetTable.getPos();
+                    Vec3d itemPos = targetTable.getEntityPos();
                     double diffX = itemPos.x - mc.player.getX();
                     double diffZ = itemPos.z - mc.player.getZ();
                     float yaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90;
@@ -1466,7 +1465,7 @@ public class Baromine extends Module {
     }
 
     private Item getAnyPlank() {
-        for (ItemStack stack : mc.player.getInventory().main) {
+        for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
             if (isPlank(stack.getItem())) return stack.getItem();
         }
         return null;
@@ -1480,14 +1479,14 @@ public class Baromine extends Module {
     }
 
     private Item getAnyLog() {
-        for (ItemStack stack : mc.player.getInventory().main) {
+        for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
             if (isLog(stack.getItem())) return stack.getItem();
         }
         return null;
     }
 
     private boolean hasLogs() {
-        for (ItemStack stack : mc.player.getInventory().main) {
+        for (ItemStack stack : mc.player.getInventory().getMainStacks()) {
             if (isLog(stack.getItem())) return true;
         }
         return false;
@@ -1827,7 +1826,7 @@ public class Baromine extends Module {
     }
 
     private void updateMendingTools() {
-        int mainHandSlot = mc.player.getInventory().selectedSlot;
+        int mainHandSlot = mc.player.getInventory().getSelectedSlot();
         ItemStack mainHand = mc.player.getMainHandStack();
         
         boolean needsSwap = false;
@@ -1852,9 +1851,9 @@ public class Baromine extends Module {
             }
             
             if (bestSlot < 9) {
-                mc.player.getInventory().selectedSlot = bestSlot;
+                mc.player.getInventory().setSelectedSlot(bestSlot);
             } else {
-                InvUtils.move().from(bestSlot).toHotbar(mc.player.getInventory().selectedSlot);
+                InvUtils.move().from(bestSlot).toHotbar(mc.player.getInventory().getSelectedSlot());
             }
             return;
         }
@@ -1991,9 +1990,9 @@ public class Baromine extends Module {
                 if (echestItemFind.slot() >= 9) {
                     int targetSlot = swapSlot.get();
                     InvUtils.move().from(echestItemFind.slot()).toHotbar(targetSlot);
-                    mc.player.getInventory().selectedSlot = targetSlot;
+                    mc.player.getInventory().setSelectedSlot(targetSlot);
                 } else {
-                    mc.player.getInventory().selectedSlot = echestItemFind.slot();
+                    mc.player.getInventory().setSelectedSlot(echestItemFind.slot());
                 }
                 
                 echestPos = findAndPlace(InvUtils.findInHotbar(Items.ENDER_CHEST));
@@ -2099,9 +2098,9 @@ public class Baromine extends Module {
                 if (shulkerInvSlot >= 9) {
                     int targetSlot = swapSlot.get();
                     InvUtils.move().from(shulkerInvSlot).toHotbar(targetSlot);
-                    mc.player.getInventory().selectedSlot = targetSlot;
+                    mc.player.getInventory().setSelectedSlot(targetSlot);
                 } else {
-                    mc.player.getInventory().selectedSlot = shulkerInvSlot;
+                    mc.player.getInventory().setSelectedSlot(shulkerInvSlot);
                 }
 
                 BlockPos placeExclude = (depositMode.get() == DepositMode.EnderChest) ? echestPos : null;
@@ -2249,7 +2248,7 @@ public class Baromine extends Module {
                 }
 
                 if (targetShulker != null) {
-                    Vec3d itemPos = targetShulker.getPos();
+                    Vec3d itemPos = targetShulker.getEntityPos();
                     double diffX = itemPos.x - mc.player.getX();
                     double diffZ = itemPos.z - mc.player.getZ();
                     float yaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90;
@@ -2504,7 +2503,7 @@ public class Baromine extends Module {
                 }
 
                 if (targetEchest != null) {
-                    Vec3d itemPos = targetEchest.getPos();
+                    Vec3d itemPos = targetEchest.getEntityPos();
                     double diffX = itemPos.x - mc.player.getX();
                     double diffZ = itemPos.z - mc.player.getZ();
                     float yaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90;
@@ -2763,7 +2762,7 @@ public class Baromine extends Module {
     private String getToolType(ItemStack stack) {
         if (stack.isEmpty()) return null;
         Item item = stack.getItem();
-        if (item instanceof PickaxeItem) return "pickaxe";
+        if (stack.isIn(ItemTags.PICKAXES)) return "pickaxe";
         if (item instanceof AxeItem) return "axe";
         if (item instanceof ShovelItem) return "shovel";
         if (item instanceof HoeItem) return "hoe";
@@ -2779,10 +2778,10 @@ public class Baromine extends Module {
         
         for (int i = 0; i < mc.player.getInventory().size(); i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack.getItem() instanceof PickaxeItem) {
+            if (stack.isIn(ItemTags.PICKAXES)) {
                 if (EnchantmentHelper.getLevel(enchantment, stack) > 0) {
                     if (i < 9) {
-                        mc.player.getInventory().selectedSlot = i;
+                        mc.player.getInventory().setSelectedSlot(i);
                     } else {
                         int targetSlot = -1;
                         for (int j = 0; j < 9; j++) {
@@ -2792,11 +2791,11 @@ public class Baromine extends Module {
                             }
                         }
                         if (targetSlot == -1) {
-                            targetSlot = mc.player.getInventory().selectedSlot;
+                            targetSlot = mc.player.getInventory().getSelectedSlot();
                         }
                         
                         InvUtils.move().from(i).toHotbar(targetSlot);
-                        mc.player.getInventory().selectedSlot = targetSlot;
+                        mc.player.getInventory().setSelectedSlot(targetSlot);
                     }
                     return true;
                 }
@@ -2822,7 +2821,7 @@ public class Baromine extends Module {
                 if (targetSlot != -1) {
                     InvUtils.move().from(i).toHotbar(targetSlot);
                 } else {
-                    InvUtils.move().from(i).toHotbar(mc.player.getInventory().selectedSlot);
+                    InvUtils.move().from(i).toHotbar(mc.player.getInventory().getSelectedSlot());
                 }
             }
         }
@@ -2832,14 +2831,14 @@ public class Baromine extends Module {
         if (mc.player == null) return;
         int bestSlot = -1;
         for (int i = 0; i < 9; i++) {
-            if (mc.player.getInventory().getStack(i).getItem() instanceof SwordItem) {
+            if (mc.player.getInventory().getStack(i).isIn(ItemTags.SWORDS)) {
                 bestSlot = i;
                 break;
             }
         }
         if (bestSlot == -1) {
             for (int i = 9; i < 36; i++) {
-                if (mc.player.getInventory().getStack(i).getItem() instanceof SwordItem) {
+                if (mc.player.getInventory().getStack(i).isIn(ItemTags.SWORDS)) {
                     int targetSlot = -1;
                     for (int j = 0; j < 9; j++) {
                         if (mc.player.getInventory().getStack(j).isEmpty()) {
@@ -2847,7 +2846,7 @@ public class Baromine extends Module {
                             break;
                         }
                     }
-                    if (targetSlot == -1) targetSlot = mc.player.getInventory().selectedSlot;
+                    if (targetSlot == -1) targetSlot = mc.player.getInventory().getSelectedSlot();
                     InvUtils.move().from(i).toHotbar(targetSlot);
                     bestSlot = targetSlot;
                     break;
@@ -2855,7 +2854,7 @@ public class Baromine extends Module {
             }
         }
         if (bestSlot != -1) {
-            mc.player.getInventory().selectedSlot = bestSlot;
+            mc.player.getInventory().setSelectedSlot(bestSlot);
         }
     }
 

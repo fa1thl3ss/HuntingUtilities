@@ -226,7 +226,7 @@ public class Gatekeeper extends Module {
         if (showBeam.get() && onlyNearestBeam.get()) {
             double minSq = Double.MAX_VALUE;
             for (PortalStructure structure : portalStructureMap.values()) {
-                double sq = mc.player.getPos().squaredDistanceTo(structure.boundingBox.getCenter());
+                double sq = mc.player.getEntityPos().squaredDistanceTo(structure.boundingBox.getCenter());
                 if (sq < minSq) { minSq = sq; nearest = structure; }
             }
         }
@@ -241,7 +241,7 @@ public class Gatekeeper extends Module {
                 renderGlowLayers(event, structure.boundingBox, color);
                 event.renderer.box(structure.boundingBox, withAlpha(color, 0), color, shapeMode.get(), 0);
             }
-            if (showBeam.get() && (nearest == null || structure == nearest) && mc.player.getPos().squaredDistanceTo(structure.boundingBox.getCenter()) <= beamDistSq) {
+            if (showBeam.get() && (nearest == null || structure == nearest) && mc.player.getEntityPos().squaredDistanceTo(structure.boundingBox.getCenter()) <= beamDistSq) {
                 SettingColor beamColor = (highlightStyle.get() == HighlightStyle.PULSE) ? pulseColor(color) : color;
                 renderBeams(event, List.of(new BeamData(structure.boundingBox, beamColor)));
             }
@@ -368,7 +368,7 @@ public class Gatekeeper extends Module {
     private void cleanupDistantPortals() {
         if (mc.player == null) return;
         double distSq = Math.pow(range.get() * 16 + 64, 2);
-        if (portals.entrySet().removeIf(e -> e.getKey().getSquaredDistance(mc.player.getPos()) > distSq)) portalsDirty = true;
+        if (portals.entrySet().removeIf(e -> e.getKey().getSquaredDistance(mc.player.getEntityPos()) > distSq)) portalsDirty = true;
 
         int px = mc.player.getBlockPos().getX() >> 4, pz = mc.player.getBlockPos().getZ() >> 4;
         int rSq = range.get() * range.get();

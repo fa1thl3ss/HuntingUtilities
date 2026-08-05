@@ -5,10 +5,10 @@ import com.example.addon.modules.Gatekeeper;
 import com.example.addon.modules.Tunnelers;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.world.ClientChunkManager;
-import net.minecraft.nbt.NbtCompound;
 import net.minecraft.network.packet.s2c.play.ChunkData;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.network.packet.s2c.play.ChunkDataS2CPacket;
+import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.WorldChunk;
 import net.minecraft.util.math.ChunkPos;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,6 +17,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -66,7 +67,7 @@ public abstract class TunnelersMixin {
             int x,
             int z,
             PacketByteBuf buf,
-            NbtCompound nbt,
+            Map<Heightmap.Type, long[]> heightmaps,
             Consumer<ChunkData.BlockEntityVisitor> chunkDataConsumer,
             CallbackInfoReturnable<WorldChunk> cir
     ) {

@@ -643,7 +643,7 @@ public class PearlPulse extends Module {
         wasSelfTriggerPressed = selfPressed;
 
         if (pingQueued.compareAndSet(true, false) && soundEnabled.get()) {
-            mc.getSoundManager().play(PositionedSoundInstance.master(
+            mc.getSoundManager().play(PositionedSoundInstance.ui(
                 pingSound.get().sound,
                 soundPitch.get().floatValue(),
                 soundVolume.get().floatValue()));
@@ -772,7 +772,7 @@ public class PearlPulse extends Module {
             return;
         }
 
-        Vec3d playerPos = mc.player.getPos();
+        Vec3d playerPos = mc.player.getEntityPos();
 
         candidates.sort((a, b) -> {
             if (requester != null) {
@@ -834,7 +834,7 @@ public class PearlPulse extends Module {
     }
 
     private void dispatchTarget(BlockPos trapdoor) {
-        double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(trapdoor));
+        double dist = mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(trapdoor));
         if (dist <= interactReach.get()) {
             interactTrapdoor(trapdoor);
         } else if (walkerEnabled.get()) {
@@ -851,7 +851,7 @@ public class PearlPulse extends Module {
 
     private void beginWalk(BlockPos target) {
         walkTarget   = target;
-        idlePosition = mc.player.getPos();
+        idlePosition = mc.player.getEntityPos();
         walkState    = WalkState.WALKING_TO;
         walkTicks    = 0;
         stuckTicks   = 0;
@@ -879,7 +879,7 @@ public class PearlPulse extends Module {
             return;
         }
 
-        Vec3d pos = mc.player.getPos();
+        Vec3d pos = mc.player.getEntityPos();
 
         if (pos.y < voidAbortY.get()) {
             abortWalk("Fell below void-abort Y (" + voidAbortY.get() + ").");
@@ -984,7 +984,7 @@ public class PearlPulse extends Module {
                     walkState  = WalkState.WALKING_BACK;
                     walkTicks  = 0;
                     stuckTicks = 0;
-                    lastPos    = mc.player.getPos();
+                    lastPos    = mc.player.getEntityPos();
                     buildReturnWaypoints();
                     mc.player.sendMessage(Text.literal("[PearlPulse] Returning to idle."), false);
                 } else {
@@ -1344,7 +1344,7 @@ public class PearlPulse extends Module {
             if (e.getType() != EntityType.ENDER_PEARL) continue;
             if (mc.player.distanceTo(e) > r) continue;
 
-            Vec3d pos = e.getLerpedPos(mc.getRenderTickCounter().getTickDelta(true));
+            Vec3d pos = e.getLerpedPos(mc.getRenderTickCounter().getTickProgress(true));
             int    px  = (int) Math.floor(e.getX());
             int    pz  = (int) Math.floor(e.getZ());
             String key = px + "," + pz;
@@ -1503,7 +1503,7 @@ public class PearlPulse extends Module {
 
     private boolean isInBubbleColumn(EnderPearlEntity pearl) {
         if (mc.world == null) return false;
-        BlockPos pos = BlockPos.ofFloored(pearl.getPos());
+        BlockPos pos = BlockPos.ofFloored(pearl.getEntityPos());
         return mc.world.getBlockState(pos).isOf(Blocks.BUBBLE_COLUMN)
             || mc.world.getBlockState(pos.down()).isOf(Blocks.BUBBLE_COLUMN);
     }
@@ -1529,29 +1529,16 @@ public class PearlPulse extends Module {
 
     private void renderPearlsOnlyBeam(Render3DEvent event, EnderPearlEntity pearl,
                                       SettingColor color, float innerRadius, float outerRadius, int height) {
-        Camera camera = mc.gameRenderer.getCamera();
-        Vec3d camPos = camera.getPos();
         Vec3d base = getOrCreateBeamPos(pearl);
+        double cx = base.x, cz = base.z;
+        double botY = base.y, topY = base.y + height;
 
-        MatrixStack matrices = event.matrices;
-        matrices.push();
-
-        matrices.translate(
-            base.x - camPos.x - 0.5,
-            base.y - camPos.y,
-            base.z - camPos.z - 0.5
-        );
-
-        VertexConsumerProvider.Immediate immediate = mc.getBufferBuilders().getEntityVertexConsumers();
-
-        BeaconBlockEntityRenderer.renderBeam(
-            matrices, immediate, BEAM_TEXTURE, event.tickDelta,
-            1.0f, mc.world.getTime(), 0, height,
-            color.getPacked(), innerRadius, outerRadius
-        );
-
-        immediate.draw();
-        matrices.pop();
+        event.renderer.box(new Box(cx - outerRadius, botY, cz - outerRadius,
+                                   cx + outerRadius, topY, cz + outerRadius),
+            withAlpha(color, Math.max(4, color.a / 4)), withAlpha(color, 0), ShapeMode.Sides, 0);
+        event.renderer.box(new Box(cx - innerRadius, botY, cz - innerRadius,
+                                   cx + innerRadius, topY, cz + innerRadius),
+            withAlpha(color, color.a), color, ShapeMode.Both, 0);
     }
 
     private void drawGlowBeam(Render3DEvent event, double cx, double botY, double cz, double topY,

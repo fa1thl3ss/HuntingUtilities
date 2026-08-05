@@ -678,9 +678,9 @@ public class Inventory101 extends Module {
                 BlockState state = mc.world.getBlockState(bhr.getBlockPos());
                 if (!state.isAir()) {
                     int bestSlot = findBestTool(state);
-                    if (bestSlot != -1 && bestSlot != mc.player.getInventory().selectedSlot) {
+                    if (bestSlot != -1 && bestSlot != mc.player.getInventory().getSelectedSlot()) {
                         if (!wasBreaking) {
-                            prevSlotAutoTool = mc.player.getInventory().selectedSlot;
+                            prevSlotAutoTool = mc.player.getInventory().getSelectedSlot();
                             wasBreaking = true;
                         }
                         InvUtils.swap(bestSlot, silentAutoTool.get());
@@ -1405,12 +1405,12 @@ public class Inventory101 extends Module {
         for (int i = 0; i < PRESET_SIZE; i++) items.add(ItemStack.EMPTY);
         if (nbtString == null || nbtString.isEmpty()) return items;
         try {
-            NbtCompound nbt = StringNbtReader.parse(nbtString);
-            if (nbt.contains("Items", NbtElement.LIST_TYPE)) {
-                NbtList list = nbt.getList("Items", NbtElement.COMPOUND_TYPE);
+            NbtCompound nbt = StringNbtReader.readCompound(nbtString);
+            NbtList list = nbt.getListOrEmpty("Items");
+            {
                 for (int i = 0; i < list.size(); i++) {
-                    NbtCompound itemTag = list.getCompound(i);
-                    int slot = itemTag.getInt("Slot");
+                    NbtCompound itemTag = list.getCompoundOrEmpty(i);
+                    int slot = itemTag.getInt("Slot", 0);
                     NbtElement itemNbt = itemTag.get("item");
                     if (slot < PRESET_SIZE && itemNbt != null) {
                         ItemStack.CODEC
@@ -1522,7 +1522,7 @@ public class Inventory101 extends Module {
         private int getColorId(ItemStack stack) {
             if (stack.getItem() instanceof BlockItem bi && bi.getBlock() instanceof ShulkerBoxBlock sb) {
                 DyeColor c = sb.getColor();
-                return c == null ? 16 : c.getId();
+                return c == null ? 16 : c.getIndex();
             }
             return 17;
         }

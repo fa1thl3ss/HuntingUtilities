@@ -435,7 +435,7 @@ public class SignScanner extends Module {
 
         double dist    = chunks.get() * 16.0;
         double rangeSq = dist * dist;
-        signs.keySet().removeIf(pos -> pos.getSquaredDistance(mc.player.getPos()) > rangeSq);
+        signs.keySet().removeIf(pos -> pos.getSquaredDistance(mc.player.getEntityPos()) > rangeSq);
 
         if (cacheSignText.get()) {
             if (timer > 0) { timer--; return; }
@@ -452,7 +452,7 @@ public class SignScanner extends Module {
                     default -> null;
                 };
                 if (texts == null) continue;
-                if (be.getPos().getSquaredDistance(mc.player.getPos()) > rangeSq) continue;
+                if (be.getPos().getSquaredDistance(mc.player.getEntityPos()) > rangeSq) continue;
 
                 List<Text> lineList = new ArrayList<>();
                 SignText front = texts[0], back = texts[1];
@@ -529,7 +529,7 @@ public class SignScanner extends Module {
                 mc.player.swingHand(Hand.MAIN_HAND);
                 InvUtils.swapBack();
             } else {
-                error("Selected dye (%s) not found in hotbar. Disabling auto-dye.", dyeColor.get().getName());
+                error("Selected dye (%s) not found in hotbar. Disabling auto-dye.", dyeColor.get().getId());
                 autoDye.set(false);
             }
         }
@@ -685,8 +685,6 @@ public class SignScanner extends Module {
 
     private void renderSign(SignEntry entry, Render2DEvent event, TextRenderer tr) {
         NametagUtils.begin(entry.pos3d, event.drawContext);
-        RenderSystem.disableDepthTest();
-        RenderSystem.depthMask(false);
 
         List<Text> linesToRender = new ArrayList<>(entry.lines);
         if (entry.count > 1) linesToRender.add(Text.literal(entry.count + " signs").formatted(Formatting.YELLOW));
@@ -712,7 +710,7 @@ public class SignScanner extends Module {
             }
             Renderer2D.COLOR.begin();
             Renderer2D.COLOR.quad(bx, by, bw, bh, backgroundColor.get());
-            Renderer2D.COLOR.render(null);
+            Renderer2D.COLOR.render();
         }
 
         tr.begin(1.0, false, true);
@@ -740,8 +738,6 @@ public class SignScanner extends Module {
         }
         tr.end();
 
-        RenderSystem.depthMask(true);
-        RenderSystem.enableDepthTest();
         NametagUtils.end(event.drawContext);
     }
 
@@ -766,7 +762,7 @@ public class SignScanner extends Module {
                 withAlpha(gc, layerAlpha)
             );
         }
-        Renderer2D.COLOR.render(null);
+        Renderer2D.COLOR.render();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -806,7 +802,7 @@ public class SignScanner extends Module {
                 withAlpha(pColor, layerAlpha)
             );
         }
-        Renderer2D.COLOR.render(null);
+        Renderer2D.COLOR.render();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -843,7 +839,7 @@ public class SignScanner extends Module {
         Renderer2D.COLOR.quad(ox,                oy + thickness,      thickness, oh - thickness * 2, lc); 
         Renderer2D.COLOR.quad(ox + ow - thickness, oy + thickness,    thickness, oh - thickness * 2, lc); 
 
-        Renderer2D.COLOR.render(null);
+        Renderer2D.COLOR.render();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

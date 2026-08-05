@@ -509,13 +509,13 @@ public class PortalMaker extends Module {
         }
 
         if (placementIndex < portalFramePositions.size()) {
-            if (mc.player.getInventory().main.isEmpty()) return;
+            if (mc.player.getInventory().getMainStacks().isEmpty()) return;
 
             if (!mc.player.getMainHandStack().isOf(Items.OBSIDIAN)) {
                 FindItemResult obsidian = InvUtils.find(Items.OBSIDIAN);
                 if (!obsidian.found()) { error("No obsidian found -> disabled."); toggle(); return; }
-                if (obsidian.isHotbar()) mc.player.getInventory().selectedSlot = obsidian.slot();
-                else InvUtils.move().from(obsidian.slot()).toHotbar(mc.player.getInventory().selectedSlot);
+                if (obsidian.isHotbar()) mc.player.getInventory().setSelectedSlot(obsidian.slot());
+                else InvUtils.move().from(obsidian.slot()).toHotbar(mc.player.getInventory().getSelectedSlot());
             }
 
             tickTimer++;
@@ -774,8 +774,8 @@ public class PortalMaker extends Module {
                 else stepOutTarget = o1;
             }
         } else {
-            recycleTarget = mc.player.getPos();
-            stepOutTarget = mc.player.getPos().add(mc.player.getRotationVector().multiply(-2.0));
+            recycleTarget = mc.player.getEntityPos();
+            stepOutTarget = mc.player.getEntityPos().add(mc.player.getRotationVector().multiply(-2.0));
         }
     }
 
@@ -964,7 +964,7 @@ public class PortalMaker extends Module {
         if (mc.player == null) return false;
         for (int i = 0; i < 9; i++) {
             if (mc.player.getInventory().getStack(i).getItem() == targetItem) {
-                mc.player.getInventory().selectedSlot = i;
+                mc.player.getInventory().setSelectedSlot(i);
                 return true;
             }
         }

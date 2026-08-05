@@ -47,8 +47,7 @@ import net.minecraft.entity.vehicle.ChestMinecartEntity;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
-import net.minecraft.item.PickaxeItem;
-import net.minecraft.item.SwordItem;
+import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.state.property.Properties;
 import net.minecraft.util.Hand;
@@ -636,7 +635,7 @@ public class DungeonAssistant extends Module {
 
                 if (type == TargetType.MISROTATED_CHEST_MINECART || type == TargetType.DISPLACED_CHEST_MINECART) {
                     double beamSize = beamWidth.get() / 100.0;
-                    Vec3d cartPos = cart.getPos();
+                    Vec3d cartPos = cart.getEntityPos();
                     Box beamBox = new Box(
                         cartPos.x - beamSize, cartPos.y, cartPos.z - beamSize,
                         cartPos.x + beamSize, mc.world.getHeight(), cartPos.z + beamSize
@@ -706,7 +705,7 @@ public class DungeonAssistant extends Module {
                 if (!endermite.isAlive()) continue;
 
                 double beamSize = beamWidth.get() / 100.0;
-                Vec3d  epos     = endermite.getPos();
+                Vec3d  epos     = endermite.getEntityPos();
                 Box    beamBox  = new Box(
                     epos.x - beamSize, epos.y, epos.z - beamSize,
                     epos.x + beamSize, mc.world.getHeight(), epos.z + beamSize
@@ -865,14 +864,14 @@ public class DungeonAssistant extends Module {
                     if (targetBlock == Blocks.CHEST || targetBlock == Blocks.TRAPPED_CHEST || targetBlock == Blocks.SPAWNER) {
                         isBreaking = true;
                         isBreakingChest = (targetBlock == Blocks.CHEST || targetBlock == Blocks.TRAPPED_CHEST);
-                        if (silentMode.get()) previousSlot = mc.player.getInventory().selectedSlot;
+                        if (silentMode.get()) previousSlot = mc.player.getInventory().getSelectedSlot();
                     } else {
                         blockToBreak = null;
                     }
                 } else if (entityToBreak != null) {
                     if (entityToBreak instanceof ChestMinecartEntity) {
                         isBreakingEntity = true;
-                        if (silentMode.get()) previousSlot = mc.player.getInventory().selectedSlot;
+                        if (silentMode.get()) previousSlot = mc.player.getInventory().getSelectedSlot();
                     } else {
                         entityToBreak = null;
                     }
@@ -902,10 +901,10 @@ public class DungeonAssistant extends Module {
             } else {
                 if (isBreakingChest) {
                     int axeSlot = findAxe();
-                    if (axeSlot != -1) mc.player.getInventory().selectedSlot = axeSlot;
+                    if (axeSlot != -1) mc.player.getInventory().setSelectedSlot(axeSlot);
                 } else {
                     int pickaxeSlot = findPickaxe();
-                    if (pickaxeSlot != -1) mc.player.getInventory().selectedSlot = pickaxeSlot;
+                    if (pickaxeSlot != -1) mc.player.getInventory().setSelectedSlot(pickaxeSlot);
                 }
                 Rotations.rotate(Rotations.getYaw(blockToBreak), Rotations.getPitch(blockToBreak), () -> {
                     mc.interactionManager.updateBlockBreakingProgress(blockToBreak, Direction.UP);
@@ -925,7 +924,7 @@ public class DungeonAssistant extends Module {
                 restoreSlot();
             } else {
                 int swordSlot = findSword();
-                if (swordSlot != -1) mc.player.getInventory().selectedSlot = swordSlot;
+                if (swordSlot != -1) mc.player.getInventory().setSelectedSlot(swordSlot);
                 if (mc.player.getAttackCooldownProgress(0f) >= 1.0f) {
                     Rotations.rotate(Rotations.getYaw(entityToBreak), Rotations.getPitch(entityToBreak), () -> {
                         mc.interactionManager.attackEntity(mc.player, entityToBreak);
@@ -1113,7 +1112,7 @@ public class DungeonAssistant extends Module {
         double rangeSq = Math.pow(spawnerBreakRange.get(), 2);
         for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
             if (entry.getValue() == TargetType.SPAWNER
-                    && entry.getKey().getSquaredDistance(mc.player.getPos()) <= rangeSq) return true;
+                    && entry.getKey().getSquaredDistance(mc.player.getEntityPos()) <= rangeSq) return true;
         }
         return false;
     }
@@ -1127,7 +1126,7 @@ public class DungeonAssistant extends Module {
 
         for (Map.Entry<BlockPos, TargetType> entry : targets.entrySet()) {
             if (entry.getValue() == TargetType.SPAWNER) {
-                double distSq = entry.getKey().getSquaredDistance(mc.player.getPos());
+                double distSq = entry.getKey().getSquaredDistance(mc.player.getEntityPos());
                 if (distSq <= rangeSq && distSq < minDistSq) { minDistSq = distSq; bestPos = entry.getKey(); }
             }
         }
@@ -1179,8 +1178,8 @@ public class DungeonAssistant extends Module {
             .filter(e -> e.getValue() == TargetType.CHEST)
             .map(Map.Entry::getKey)
             .filter(pos -> !checkedContainers.contains(pos))
-            .filter(pos -> Math.sqrt(pos.getSquaredDistance(mc.player.getPos())) <= 4.5)
-            .sorted(Comparator.comparingDouble(pos -> pos.getSquaredDistance(mc.player.getPos())))
+            .filter(pos -> Math.sqrt(pos.getSquaredDistance(mc.player.getEntityPos())) <= 4.5)
+            .sorted(Comparator.comparingDouble(pos -> pos.getSquaredDistance(mc.player.getEntityPos())))
             .toList();
 
         if (nearbyChests.isEmpty()) return false;
@@ -1421,7 +1420,7 @@ public class DungeonAssistant extends Module {
     }
 
     private TargetType getMinecartType(ChestMinecartEntity cart) {
-        Vec3d exactPos = cart.getPos();
+        Vec3d exactPos = cart.getEntityPos();
         BlockPos blockPos = cart.getBlockPos();
         
         boolean isDisplaced = false;
@@ -1681,7 +1680,7 @@ public class DungeonAssistant extends Module {
 
     private void restoreSlot() {
         if (silentMode.get() && previousSlot >= 0 && mc.player != null) {
-            mc.player.getInventory().selectedSlot = previousSlot;
+            mc.player.getInventory().setSelectedSlot(previousSlot);
             previousSlot = -1;
         }
     }
@@ -1694,13 +1693,13 @@ public class DungeonAssistant extends Module {
 
     private int findPickaxe() {
         for (int i = 0; i < 9; i++)
-            if (mc.player.getInventory().getStack(i).getItem() instanceof PickaxeItem) return i;
+            if (mc.player.getInventory().getStack(i).isIn(ItemTags.PICKAXES)) return i;
         return -1;
     }
 
     private int findSword() {
         for (int i = 0; i < 9; i++)
-            if (mc.player.getInventory().getStack(i).getItem() instanceof SwordItem) return i;
+            if (mc.player.getInventory().getStack(i).isIn(ItemTags.SWORDS)) return i;
         return -1;
     }
 

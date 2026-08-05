@@ -614,8 +614,8 @@ public class StatisticsInformation extends HudElement {
 
     private double getSpeedBps() {
         if (mc.player == null) return 0.0;
-        double dx = mc.player.getX() - mc.player.prevX;
-        double dz = mc.player.getZ() - mc.player.prevZ;
+        double dx = mc.player.getX() - mc.player.lastRenderX;
+        double dz = mc.player.getZ() - mc.player.lastRenderZ;
         return Math.sqrt(dx * dx + dz * dz) * 20.0;
     }
 

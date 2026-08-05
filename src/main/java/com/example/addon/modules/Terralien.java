@@ -562,10 +562,10 @@ public class Terralien extends Module {
         if (mc.player == null) return;
         double maxDistanceSq = Math.pow(effectiveRange * 16.0 + 64.0, 2);
 
-        pendingUnnaturalBlocks.removeIf(pos -> pos.getSquaredDistance(mc.player.getPos()) > maxDistanceSq);
-        processedBlocks.removeIf(pos -> pos.getSquaredDistance(mc.player.getPos()) > maxDistanceSq);
-        blacklistedHighways.removeIf(pos -> pos.getSquaredDistance(mc.player.getPos()) > maxDistanceSq);
-        activeClusters.entrySet().removeIf(entry -> entry.getKey().getSquaredDistance(mc.player.getPos()) > maxDistanceSq);
+        pendingUnnaturalBlocks.removeIf(pos -> pos.getSquaredDistance(mc.player.getEntityPos()) > maxDistanceSq);
+        processedBlocks.removeIf(pos -> pos.getSquaredDistance(mc.player.getEntityPos()) > maxDistanceSq);
+        blacklistedHighways.removeIf(pos -> pos.getSquaredDistance(mc.player.getEntityPos()) > maxDistanceSq);
+        activeClusters.entrySet().removeIf(entry -> entry.getKey().getSquaredDistance(mc.player.getEntityPos()) > maxDistanceSq);
 
         int playerChunkX = mc.player.getBlockPos().getX() >> 4;
         int playerChunkZ = mc.player.getBlockPos().getZ() >> 4;

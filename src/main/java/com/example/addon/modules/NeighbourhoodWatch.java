@@ -263,6 +263,20 @@ public class NeighbourhoodWatch extends Module {
         .build()
     );
 
+    private final Setting<Boolean> colorFriendsInTab = sgTabList.add(new BoolSetting.Builder()
+        .name("color-friends-in-tab")
+        .description("Colors friends in the tab list with the friend color.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Boolean> colorEnemiesInTab = sgTabList.add(new BoolSetting.Builder()
+        .name("color-enemies-in-tab")
+        .description("Colors enemies in the tab list with the enemy color.")
+        .defaultValue(false)
+        .build()
+    );
+
     // ═══════════════════════════════════════════════════════════════════════════
     // State
     // ═══════════════════════════════════════════════════════════════════════════
@@ -294,7 +308,7 @@ public class NeighbourhoodWatch extends Module {
         updateFriendEnemySets();
         if (mc.player != null && mc.player.networkHandler != null) {
             mc.player.networkHandler.getPlayerList().forEach(entry -> {
-                String name = entry.getProfile().getName();
+                String name = entry.getProfile().name();
                 if (name != null && !name.isEmpty()) playersInTab.add(name);
             });
         }
@@ -418,7 +432,7 @@ public class NeighbourhoodWatch extends Module {
 
         for (PlayerListS2CPacket.Entry entry : packet.getEntries()) {
             if (entry.profile() == null) continue;
-            String name = entry.profile().getName();
+            String name = entry.profile().name();
             if (name == null || name.isEmpty()) continue;
 
             if (packet.getActions().contains(PlayerListS2CPacket.Action.ADD_PLAYER)) {
@@ -662,6 +676,12 @@ public class NeighbourhoodWatch extends Module {
         if (isProxy(name))  return PlayerStatus.Proxy;
         return PlayerStatus.Other;
     }
+
+    public boolean shouldColorFriendInTab() { return colorFriendsInTab.get(); }
+    public boolean shouldColorEnemyInTab()  { return colorEnemiesInTab.get(); }
+
+    public SettingColor getFriendTabColor() { return friendColor.get(); }
+    public SettingColor getEnemyTabColor()  { return enemyColor.get(); }
 
     /** Exposes whether the disconnect-on-player safety feature is armed. Used by the HUD. */
     public boolean isDisconnectOnPlayerArmed() {

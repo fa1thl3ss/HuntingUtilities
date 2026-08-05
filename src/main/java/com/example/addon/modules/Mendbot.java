@@ -18,7 +18,6 @@ import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.item.ArmorItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -579,7 +578,7 @@ public class Mendbot extends Module {
 
         if (doArmour) {
             int slot = findDamagedItem(stack -> {
-                if (stack.getItem() instanceof ArmorItem && !stack.isOf(Items.ELYTRA)) {
+                if (isArmor(stack) && !stack.isOf(Items.ELYTRA)) {
                     if (goldenHelmet.get()) {
                         var eq = stack.get(DataComponentTypes.EQUIPPABLE);
                         return eq != null && eq.slot() != EquipmentSlot.HEAD;
@@ -608,7 +607,7 @@ public class Mendbot extends Module {
         if (stack.isOf(Items.ELYTRA)) {
             return EquipmentSlot.CHEST;
         }
-        if (stack.getItem() instanceof ArmorItem) {
+        if (isArmor(stack)) {
             var equippable = stack.get(DataComponentTypes.EQUIPPABLE);
             if (equippable != null) {
                 return equippable.slot();
@@ -696,9 +695,9 @@ public class Mendbot extends Module {
     private boolean handleArmourMending() {
         for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
             ItemStack stack = mc.player.getEquippedStack(slot);
-            if (stack.getItem() instanceof ArmorItem && !stack.isOf(Items.ELYTRA) && stack.isDamaged()) { throwXpBottles(); return true; }
+            if (isArmor(stack) && !stack.isOf(Items.ELYTRA) && stack.isDamaged()) { throwXpBottles(); return true; }
         }
-        int damaged = findDamagedItem(stack -> stack.getItem() instanceof ArmorItem && !stack.isOf(Items.ELYTRA));
+        int damaged = findDamagedItem(stack -> isArmor(stack) && !stack.isOf(Items.ELYTRA));
         if (damaged != -1) {
             ItemStack stack = mc.player.getInventory().getStack(damaged);
             var eq = stack.get(DataComponentTypes.EQUIPPABLE);
@@ -711,10 +710,17 @@ public class Mendbot extends Module {
         return false;
     }
 
+    private boolean isArmor(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        var eq = stack.get(DataComponentTypes.EQUIPPABLE);
+        if (eq == null || eq.slot().getType() != EquipmentSlot.Type.HUMANOID_ARMOR) return false;
+        return stack.contains(DataComponentTypes.MAX_DAMAGE);
+    }
+
     private boolean isTool(ItemStack stack) {
         if (stack.isEmpty()) return false;
         Item i = stack.getItem();
-        return i instanceof net.minecraft.item.PickaxeItem || i instanceof net.minecraft.item.SwordItem || i instanceof net.minecraft.item.AxeItem || i instanceof net.minecraft.item.ShovelItem || i == Items.BOW || i == Items.FLINT_AND_STEEL || i == Items.SHIELD || i == Items.TRIDENT || i == Items.FISHING_ROD;
+        return stack.isIn(net.minecraft.registry.tag.ItemTags.PICKAXES) || stack.isIn(net.minecraft.registry.tag.ItemTags.SWORDS) || i instanceof net.minecraft.item.AxeItem || i instanceof net.minecraft.item.ShovelItem || i == Items.BOW || i == Items.FLINT_AND_STEEL || i == Items.SHIELD || i == Items.TRIDENT || i == Items.FISHING_ROD;
     }
 
     private void throwXpBottles() {
@@ -736,7 +742,7 @@ public class Mendbot extends Module {
                     InvUtils.swapBack();
                     InvUtils.move().from(empty).to(xp);
                 } else {
-                    int prev = mc.player.getInventory().selectedSlot;
+                    int prev = mc.player.getInventory().getSelectedSlot();
                     InvUtils.move().from(xp).toHotbar(prev);
                     for (int i = 0; i < packetsPerBurst.get(); i++) mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                     InvUtils.move().from(prev).to(xp);

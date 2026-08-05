@@ -253,7 +253,7 @@ public class ElytraAssistant extends Module {
         int bestSlot = -1;
         int bestDurability = -1;
 
-        for (int i = 0; i < mc.player.getInventory().main.size(); i++) {
+        for (int i = 0; i < mc.player.getInventory().getMainStacks().size(); i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (!isUsableElytra(stack)) continue;
 
@@ -321,7 +321,7 @@ public class ElytraAssistant extends Module {
         if (!result.found()) return;
 
         int slot = result.slot();
-        int previousSlot = mc.player.getInventory().selectedSlot;
+        int previousSlot = mc.player.getInventory().getSelectedSlot();
 
         if (isHotbarSlot(slot)) {
             InvUtils.swap(slot, silentRocket.get());

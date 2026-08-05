@@ -275,7 +275,7 @@ public class GridLock extends Module {
             rocketPilot.toggle();
         }
 
-        origin = mc.player.getPos();
+        origin = mc.player.getEntityPos();
         paused = false;
         lastHealth = mc.player.getHealth();
         pausedBySafety = false;
@@ -327,14 +327,14 @@ public class GridLock extends Module {
         }
 
         // ── Max distance ──
-        if (useMaxDistance.get() && mc.player.getPos().distanceTo(origin) > maxDistance.get()) {
+        if (useMaxDistance.get() && mc.player.getEntityPos().distanceTo(origin) > maxDistance.get()) {
             info("Reached max distance of %d blocks. Disabling.", maxDistance.get());
             toggle();
             return;
         }
 
         // ── Advance waypoint when close ──
-        Vec3d playerFlat = mc.player.getPos().multiply(1, 0, 1);
+        Vec3d playerFlat = mc.player.getEntityPos().multiply(1, 0, 1);
         Vec3d targetFlat = currentTarget.multiply(1, 0, 1);
         if (playerFlat.squaredDistanceTo(targetFlat) < 30 * 30) {
             calculateNextTarget();

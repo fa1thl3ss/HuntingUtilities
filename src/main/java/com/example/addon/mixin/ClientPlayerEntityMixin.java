@@ -13,14 +13,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class ClientPlayerEntityMixin {
 
     @Shadow public float nauseaIntensity;
-    @Shadow public float prevNauseaIntensity;
+    @Shadow public float lastNauseaIntensity;
 
     @Inject(method = "tickNausea", at = @At("HEAD"), cancellable = true)
     private void onTickNausea(boolean fromPortalEffect, CallbackInfo ci) {
         if (!fromPortalEffect) return;
         EightToOne eto = Modules.get().get(EightToOne.class);
         if (eto != null && eto.isPortalGuiEnabled()) {
-            this.prevNauseaIntensity = this.nauseaIntensity;
+            this.lastNauseaIntensity = this.nauseaIntensity;
             this.nauseaIntensity = 0.0f;
             ci.cancel();
         }

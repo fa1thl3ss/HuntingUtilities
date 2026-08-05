@@ -74,7 +74,7 @@ public abstract class PortalMakerMixin {
         );
 
         // Only damage the item on the server (prevents double-damage desync)
-        if (!world.isClient && context.getPlayer() != null) {
+        if (!world.isClient() && context.getPlayer() != null) {
             EquipmentSlot slot = context.getHand() == Hand.MAIN_HAND ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND;
             context.getStack().damage(1, context.getPlayer(), slot);
         }

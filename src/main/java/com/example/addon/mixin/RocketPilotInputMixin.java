@@ -5,24 +5,25 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.input.Input;
 import net.minecraft.client.input.KeyboardInput;
+import net.minecraft.util.PlayerInput;
+import net.minecraft.util.math.Vec2f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(KeyboardInput.class)
-public class RocketPilotInputMixin {
+public abstract class RocketPilotInputMixin extends Input {
 
-    // 1.21.4: KeyboardInput#tick takes no parameters beyond CallbackInfo.
     @Inject(method = "tick", at = @At("TAIL"))
     private void onTick(CallbackInfo ci) {
         RocketPilot rocketPilot = Modules.get().get(RocketPilot.class);
         if (rocketPilot != null && rocketPilot.isActive() && rocketPilot.useFreeLookY.get()) {
             MinecraftClient mc = MinecraftClient.getInstance();
             if (mc.player != null && mc.player.isGliding()) {
-                Input input = (Input) (Object) this;
-                input.movementForward = 0;
-                input.movementSideways = 0;
+                PlayerInput pi = this.playerInput;
+                this.playerInput = new PlayerInput(false, false, false, false, pi.jump(), pi.sneak(), pi.sprint());
+                this.movementVector = Vec2f.ZERO;
             }
         }
     }

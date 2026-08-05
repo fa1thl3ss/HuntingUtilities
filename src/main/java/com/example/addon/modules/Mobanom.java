@@ -505,7 +505,8 @@ public class Mobanom extends Module {
     }
 
     private boolean hasUnnaturalItems(MobEntity mob) {
-        for (ItemStack stack : mob.getArmorItems()) {
+        for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[]{net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST, net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
+            ItemStack stack = mob.getEquippedStack(slot);
             if (isUnnatural(stack)) return true;
         }
         // Piglins (including babies) naturally spawn holding crossbows or nothing.

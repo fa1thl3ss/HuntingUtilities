@@ -1,6 +1,5 @@
 package com.example.addon.modules;
 
-import java.lang.reflect.Method;
 
 import com.example.addon.HuntingUtilities;
 
@@ -18,6 +17,7 @@ import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
 import net.minecraft.text.Text;
@@ -219,16 +219,6 @@ public class Handhold extends Module {
     );
 
     // ─── Internal State ───────────────────────────────────────────────────────────
-    private static Method getFlagMethod;
-
-    static {
-        try {
-            getFlagMethod = Entity.class.getDeclaredMethod("getFlag", int.class);
-            getFlagMethod.setAccessible(true);
-        } catch (NoSuchMethodException e) {
-            HuntingUtilities.LOG.error("Failed to find getFlag method", e);
-        }
-    }
 
     private boolean wasTargetFlying = false;
     private boolean forcedRocketPilot = false;
@@ -326,12 +316,7 @@ public class Handhold extends Module {
     }
 
     private boolean isFallFlying(Entity entity) {
-        if (getFlagMethod == null) return false;
-        try {
-            return (boolean) getFlagMethod.invoke(entity, 7);
-        } catch (Exception e) {
-            return false;
-        }
+        return entity instanceof LivingEntity living && living.isGliding();
     }
 
     private void forceDisconnect(String reason) {
@@ -351,7 +336,7 @@ public class Handhold extends Module {
 
         FindItemResult rocketResult = InvUtils.findInHotbar(Items.FIREWORK_ROCKET);
         if (rocketResult.found()) {
-            int prevSlot = mc.player.getInventory().selectedSlot;
+            int prevSlot = mc.player.getInventory().getSelectedSlot();
             InvUtils.swap(rocketResult.slot(), false);
             mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
             InvUtils.swap(prevSlot, false);
@@ -531,8 +516,8 @@ public class Handhold extends Module {
                 obstaclePauseTimer--;
             } else {
                 Vec3d lookPos = targetFlying ? 
-                    target.getPos().add(target.getVelocity().multiply(5)) : 
-                    target.getPos();
+                    target.getEntityPos().add(target.getVelocity().multiply(5)) : 
+                    target.getEntityPos();
                     
                 if (mc.player.isGliding() && isObstacleInWay(lookPos)) {
                     obstaclePauseTimer = obstaclePauseTicks.get();

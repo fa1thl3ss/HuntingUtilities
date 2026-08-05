@@ -418,7 +418,7 @@ public class EightToOne extends Module {
 
     private void processNewDiscovery(BlockPos pos) {
         if (autoMarkRange.get() <= 0 || mc.player == null) return;
-        if (pos.getSquaredDistance(mc.player.getPos()) > (double) autoMarkRange.get() * autoMarkRange.get()) return;
+        if (pos.getSquaredDistance(mc.player.getEntityPos()) > (double) autoMarkRange.get() * autoMarkRange.get()) return;
         if (exclusionTimer > 0 && entryPortalPos != null && pos.getSquaredDistance(entryPortalPos) <= ENTRY_EXCLUSION_RADIUS_SQ) return;
         if (createdPortals.add(pos)) portalsDirty = true;
     }
@@ -543,14 +543,14 @@ public class EightToOne extends Module {
         double distSq = Math.pow(range.get() * 16 + 64, 2);
         boolean removed = false;
         
-        if (portals.entrySet().removeIf(e -> e.getKey().getSquaredDistance(mc.player.getPos()) > distSq)) {
+        if (portals.entrySet().removeIf(e -> e.getKey().getSquaredDistance(mc.player.getEntityPos()) > distSq)) {
             portalsDirty = true;
             removed = true;
         }
 
         if (removed) {
             portalStructureMap.entrySet().removeIf(e -> 
-                e.getValue().boundingBox.getCenter().squaredDistanceTo(mc.player.getPos()) > distSq);
+                e.getValue().boundingBox.getCenter().squaredDistanceTo(mc.player.getEntityPos()) > distSq);
             framesDirty = true;
         }
 
@@ -588,7 +588,7 @@ public class EightToOne extends Module {
         if (showBeam.get() && onlyNearestBeam.get()) {
             double minSq = Double.MAX_VALUE;
             for (PortalStructure structure : portalStructureMap.values()) {
-                double sq = mc.player.getPos().squaredDistanceTo(structure.boundingBox.getCenter());
+                double sq = mc.player.getEntityPos().squaredDistanceTo(structure.boundingBox.getCenter());
                 if (sq < minSq) { minSq = sq; nearest = structure; }
             }
         }
@@ -622,7 +622,7 @@ public class EightToOne extends Module {
             }
             
             if (showBeam.get() && (nearest == null || structure == nearest) 
-                && mc.player.getPos().squaredDistanceTo(structure.boundingBox.getCenter()) <= beamDistSq) {
+                && mc.player.getEntityPos().squaredDistanceTo(structure.boundingBox.getCenter()) <= beamDistSq) {
                 SettingColor beamColor = (highlightStyle.get() == HighlightStyle.PULSE) ? pulseColor(color) : color;
                 renderBeams(event, List.of(new BeamData(structure.boundingBox, beamColor)));
             }
